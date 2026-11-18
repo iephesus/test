@@ -1,0 +1,30 @@
+'use strict';
+// One workspace owns a bounded local repair queue. Each object shares its
+// existing inventory engine and lock; no service, inbox or checkpoint writes.
+const fs=require('node:fs'),R=require('../lib/inventory-repair-state'),I=require('../lib/inventory-index');
+const transient=e=>['LOCAL_VIEW_CHANGED','DATA_LOCK_BUSY','EBUSY','EAGAIN','ETXTBSY','ENOENT'].includes(e.code);
+function create(base,{publish=()=>{},maxAttempts=3,maxMs=15000,delays=[120,450],calculate=I.inventoryAsync}={}){const pending=new Map();let chain=Promise.resolve(),closed=false;const controller=new AbortController();
+ function notify(state,snapshot){if(closed)return;publish('inventoryRepair',{owner:state.owner,id:state.id,state:state.state,attempts:state.attempts,recovery:state.recovery===true,at:state.finishedAt||state.startedAt||state.queuedAt,diagnostic:state.diagnostic,...(snapshot?{snapshot}:{})});}
+ function request(query,{taskId,force=false,diagnostic}={}){if(closed)throw Error('本地统计服务已结束');const location=require('./local-inventory').locate(base,query),{dir,owner}=location,key=owner.category+':'+owner.id;const active=pending.get(key);if(active){active.taskIds.add(taskId);return active;}
+  const old=R.read(base,owner),snapshot=I.snapshot(dir,owner);if(!force&&snapshot&&Object.values(snapshot.totals).every(t=>t.complete)){const value={...(old||{}),schema:1,id:old?.id||require('node:crypto').randomUUID(),owner,taskIds:[...new Set([...(old?.taskIds||[]),taskId].filter(Boolean))].slice(-64),state:'complete',recovery:!!taskId||old?.recovery===true,attempts:0,finishedAt:new Date().toISOString(),version:snapshot.version};if(taskId||old)R.save(base,value);if(taskId||old?.recovery)queueMicrotask(()=>notify(value,snapshot));return {id:value.id,state:'complete',promise:Promise.resolve(snapshot)};}
+  const state=R.queue(base,owner,taskId,diagnostic);state.recovery=!!taskId||old?.recovery===true;R.save(base,state);const work={id:state.id,state:'queued',taskIds:new Set(state.taskIds),promise:null},existed=fs.existsSync(dir);pending.set(key,work);notify(state);
+  work.promise=chain.catch(()=>{}).then(async()=>{const started=Date.now(),signal=AbortSignal.any([controller.signal,AbortSignal.timeout(maxMs)]);let error;try{for(let attempt=1;attempt<=maxAttempts;attempt++){
+    if(signal.aborted)break;if(Date.now()-started>=maxMs)break;if(existed&&!fs.existsSync(dir))throw Object.assign(Error('统计对象已移除'),{code:'LOCAL_OWNER_REMOVED'});
+    const current=R.read(base,owner);if(current?.id!==state.id)throw Object.assign(Error('已有较新的统计修复请求'),{code:'LOCAL_REPAIR_SUPERSEDED'});
+    Object.assign(state,{state:'running',attempts:attempt,startedAt:state.startedAt||new Date().toISOString(),taskIds:[...work.taskIds].filter(Boolean).slice(-64)});R.save(base,state);notify(state);
+    let release;try{release=require('../lib/workspace-access').enter(base);const result=await calculate(dir,owner,location.kind,{signal});if(result.updating)throw Object.assign(Error('本地统计正在更新'),{code:'DATA_LOCK_BUSY'});if(!result.complete)throw Object.assign(Error('部分本地统计来源未能确认'),{code:result.diagnostic?.code||'LOCAL_SOURCE_INVALID',diagnostic:result.diagnostic||result.diagnostics?.[0]||{source:'<sources>',phase:'project',code:'LOCAL_SOURCE_INVALID'}});
+     const snapshot=I.snapshot(dir,owner);if(!snapshot)throw Object.assign(Error('统计来源在提交后变化'),{code:'LOCAL_VIEW_CHANGED',diagnostic:{source:'<manifest>',phase:'after-commit',code:'LOCAL_VIEW_CHANGED'}});
+     if(R.read(base,owner)?.id!==state.id)throw Object.assign(Error('已有较新的统计修复请求'),{code:'LOCAL_REPAIR_SUPERSEDED'});
+     Object.assign(state,{state:'complete',finishedAt:new Date().toISOString(),version:snapshot.version,diagnostic:null,taskIds:[...work.taskIds].filter(Boolean).slice(-64)});R.save(base,state);notify(state,snapshot);return snapshot;
+    }catch(e){if(signal.aborted&&!controller.signal.aborted)e=Object.assign(Error('本地统计重试已达到时间上限'),{code:'LOCAL_REPAIR_TIMEOUT'});error=e;if(controller.signal.aborted||!transient(e)||attempt===maxAttempts||Date.now()-started>=maxMs)break;}finally{release?.();}
+    await new Promise(resolve=>{const timer=setTimeout(done,Math.min(delays[attempt-1]??450,Math.max(0,maxMs-(Date.now()-started))));function done(){clearTimeout(timer);controller.signal.removeEventListener('abort',done);resolve();}controller.signal.addEventListener('abort',done,{once:true});});
+   }
+   if(controller.signal.aborted){Object.assign(state,{state:'queued',diagnostic:{source:'<repair>',phase:'interrupted',code:'LOCAL_REPAIR_INTERRUPTED'}});if(R.read(base,owner)?.id===state.id)R.save(base,state);throw Object.assign(Error('本地统计已暂停，重启后继续'),{code:'LOCAL_REPAIR_INTERRUPTED'});}
+   error||=Object.assign(Error('本地统计重试已达到时间上限'),{code:'LOCAL_REPAIR_TIMEOUT'});Object.assign(state,{state:'failed',finishedAt:new Date().toISOString(),recoverable:transient(error),diagnostic:error.diagnostic||{source:'<repair>',phase:'calculate',code:error.code||'LOCAL_STATISTICS_FAILED'},taskIds:[...work.taskIds].filter(Boolean).slice(-64)});if(R.read(base,owner)?.id===state.id){R.save(base,state);notify(state);}throw error;
+  }finally{pending.delete(key);if(!closed){const next=R.read(base,owner);if(next?.id!==state.id&&next?.state==='queued')queueMicrotask(()=>{if(!closed)request(query,{taskId:next.taskIds?.at(-1),force:true});});}}});chain=work.promise.catch(()=>{});work.promise.catch(()=>{});return work;
+ }
+ function schedule(job){const s=job.result;if(!s?.syncOnly||s.persistence?.coreSaved!==true)return null;const failure=s.partialFailures?.find(f=>f.stage==='inventory-index');if(!failure)return null;const work=request(job.query,{taskId:s.batchId||job.id,diagnostic:failure.diagnostic});return {id:work.id,state:work.state};}
+ function recover(){for(const state of R.list(base)){if(state.state==='complete'||state.state==='failed'&&!state.recoverable)continue;const mode=state.owner.category==='posts'?'user-posts':state.owner.category==='post-comments'?'post-comments':'comments-both';request({target:state.owner.id,mode},{taskId:state.taskIds?.at(-1)});}}
+ return {request,schedule,recover,close(){closed=true;controller.abort();},idle:()=>chain};
+}
+module.exports={create};

@@ -1,0 +1,209 @@
+#view-settings .settings-status-lane {
+ display: flex;
+ align-items: center;
+ gap: 8px;
+ min-inline-size: 0;
+ min-block-size: 30px;
+}
+#view-settings .settings-status-text {
+ flex: 1;
+ min-inline-size: 0;
+ overflow: hidden;
+ text-overflow: ellipsis;
+ white-space: nowrap;
+}
+#view-settings .settings-status-lane .settings-status-text {
+ margin: 0;
+ line-height: 26px;
+}
+#view-settings .settings-status-text > .notice-copy {
+ display: block;
+ overflow: hidden;
+ text-overflow: ellipsis;
+}
+#view-settings .settings-status-text.dismissible-notice {
+ box-sizing: border-box;
+ padding: 0 28px 0 8px !important;
+ background: #fff8ed;
+ border: 0;
+ border-radius: 5px;
+ color: #805c24;
+}
+#view-settings .settings-status-text > .notice-dismiss {
+ inset: 1px 1px auto auto;
+ width: 24px;
+ height: 24px;
+}
+#view-settings .settings-status-action {
+ flex: none;
+ min-block-size: 26px;
+ padding: 1px 6px;
+ font-size: 11px;
+ white-space: nowrap;
+}
+#view-settings .settings-status-detail {
+ flex: none;
+ display: grid;
+ place-items: center;
+ width: 26px;
+ height: 26px;
+ padding: 0;
+ border: 1px solid #dce5f0;
+ border-radius: 7px;
+ background: #f6f8fc;
+ color: #526782;
+ font-size: 12px;
+ font-weight: 650;
+ line-height: 1;
+}
+#view-settings .settings-status-detail:hover { background: #edf2fa; border-color: #cbd8e8; }
+#view-settings .settings-status-lane:not(:has(.settings-status-text:not([hidden]):not(:empty))) > .settings-status-detail {
+ visibility: hidden;
+}
+#view-settings #service-account-status:not(:has(#account-info.dismissible-notice:not([hidden]), #service-login-status:not([hidden]))) > .settings-status-detail,
+
+#view-settings .settings-status-lane .account-info {
+ border: 0;
+ padding: 0;
+ margin: 0;
+}
+#view-settings .settings-account-card {
+ display: flex;
+ flex-direction: column;
+}
+#view-settings .settings-account-panel {
+ min-inline-size: 0;
+ padding: 9px 12px 5px;
+ background: #f6f8fc;
+ border: 1px solid #e7edf6;
+ border-radius: 9px;
+}
+#view-settings .settings-account-fields {
+ display: grid;
+ grid-template-columns: minmax(0,1.2fr) minmax(0,1fr) minmax(0,.85fr);
+ gap: 10px;
+ margin: 0;
+}
+#view-settings .settings-account-fields dt {
+ overflow: hidden;
+ white-space: nowrap;
+ text-overflow: ellipsis;
+ color: #61738c;
+ font-size: 11px;
+ line-height: 17px;
+}
+#view-settings .settings-account-fields dd {
+ margin: 0;
+ overflow: hidden;
+ white-space: nowrap;
+ text-overflow: ellipsis;
+ color: #263c5b;
+ font-size: 13px;
+ font-weight: 650;
+ line-height: 21px;
+ font-variant-numeric: tabular-nums;
+}
+#view-settings .settings-account-panel .settings-status-lane {
+ color: #63758f;
+ font-size: 11px;
+}
+
+
+
+
+
+
+
+#view-settings .settings-account-panel[data-show-brief] .account-info {
+ display: none;
+}
+#view-settings .settings-account-card .settings-account-primary {
+ min-block-size: 38px;
+ margin: 12px 0 0;
+}
+#view-settings .settings-account-card .settings-account-secondary {
+ min-block-size: 36px;
+ margin: 6px 0 0;
+}
+#view-settings .settings-account-card .settings-privacy {
+ margin-block-start: 7px;
+}
+
+
+
+
+#view-settings #service-login-status:not([hidden]) {
+ display: flex;
+ flex: 1;
+ align-items: center;
+ gap: 6px;
+ min-inline-size: 0;
+}
+#view-settings #service-login-heading {
+ flex: 0 1 auto;
+ min-inline-size: 0;
+ overflow: hidden;
+ text-overflow: ellipsis;
+ white-space: nowrap;
+ font-size: 12px;
+}
+
+#view-settings .settings-protection-label {
+ flex: none;
+ color: #526782;
+ font-size: 12px;
+ font-weight: 600;
+}
+
+
+#view-settings :is(#settings-data-status, #price-status-lane) { flex: 1; }
+#view-settings :is(#exchange-status, #cleanup-result) { margin: 0; }
+#view-settings .price-reference-scroll {
+ block-size: 180px;
+ overflow: auto;
+}
+#view-settings .feedback-heading {
+ display: flex;
+ align-items: center;
+ gap: 12px;
+}
+#view-settings .feedback-heading h2 { flex: none; margin: 0; }
+#view-settings #feedback-status-lane { flex: 1; }
+#view-settings #feedback-status { text-align: end; }
+#view-settings #feedback-preview-toggle { flex: none; inline-size: 100px; }
+#view-settings .settings-status-dialog {
+ width: min(500px, calc(100vw - 32px));
+ max-block-size: 80vh;
+ overflow: hidden;
+ border: 1px solid #dfe6f0;
+ border-radius: 12px;
+ padding: 22px;
+ color: var(--ink);
+}
+#view-settings .settings-status-dialog[open] {
+ display: flex;
+ flex-direction: column;
+ align-items: flex-start;
+ gap: 14px;
+}
+#view-settings .settings-status-dialog::backdrop { background: #25375345; }
+#view-settings .settings-status-dialog h2 { margin: 0; font-size: 17px; }
+#view-settings .settings-status-dialog-body {
+ align-self: stretch;
+ overflow: auto;
+ overscroll-behavior: contain;
+ min-block-size: 0;
+}
+#view-settings .settings-status-dialog p {
+ white-space: pre-line;
+ overflow-wrap: anywhere;
+ line-height: 1.7;
+}
+#view-settings .settings-status-dialog-body > :first-child { margin-block-start: 0; }
+#view-settings .settings-status-dialog-body > :last-child { margin-block-end: 0; }
+#view-settings .settings-status-dialog > button { flex: none; align-self: flex-end; }
+#view-settings .settings-protection-result:empty { display: none; }
+
+.follow-budget-usage{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px 14px}
+.follow-budget-usage .field-hint{flex:1 1 220px;margin:0}
+.follow-budget-usage .button{flex:none;padding:7px 11px;font-size:11px;white-space:nowrap}

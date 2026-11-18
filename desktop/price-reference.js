@@ -1,0 +1,16 @@
+'use strict';
+// Informational prices never authorize requests or replace the acquisition budget.
+const fs=require('node:fs'),path=require('node:path');
+const {readerRoot}=require('../lib/data-layout'),{atomic}=require('../lib/update-progress');
+const jsonQuery=require('./json-query'),priceQueryOptions={timeoutMs:12000,maxBytes:2*1024*1024,maxErrorBytes:300,includeStderr:false,messages:{cancelled:'价格查询已停止',timeout:'价格查询超时',tooLarge:'价格响应过大',failed:'价格查询未成功，可稍后重试',invalid:'价格响应无法识别'}};
+const definitions=[
+ ['sent','获取发出评论','comments','by_me/other'],['received','获取收到评论','comments','to_me/other'],
+ ['post-comments','获取博文评论','comments','show/all'],['mentions-comments','评论中的 @','comments','mentions/other'],
+ ['mentions-posts','微博中的 @','statuses','mentions/other'],['user-posts','获取用户微博','statuses','user_timeline/other'],
+ ['post-details','补取微博详情','statuses','show_batch/biz'],['profile','更新昵称与头像','users','show_batch/other']
+];
+function normalized(raw,definition,checkedAt){const p=require('../lib/command-pricing').parse(raw,{group:definition[2],action:definition[3]});if(!p)return null;return {id:definition[0],group:definition[2],action:definition[3],unitPrice:p.unitPrice,priceType:p.priceType,checkedAt};}
+function read(base){const file=path.join(readerRoot(base),'price-reference.json');let value={schema:1,entries:{}};try{value=JSON.parse(fs.readFileSync(file));if(value.schema!==1||!value.entries||typeof value.entries!=='object')throw Error('格式无效');}catch(error){return {schema:1,entries:{},warning:error.code==='ENOENT'?'尚未查询接口单价；可点击“查询最新单价”。':'本地价格缓存无法读取，未将未知单价视为零。'};}return value;}
+function snapshot(base){const value=read(base);return {rows:definitions.map(d=>{const entry=value.entries[d[0]],valid=entry&&entry.group===d[2]&&entry.action===d[3]&&Number.isFinite(Date.parse(entry.checkedAt))&&normalized({group:d[2],action:d[3],method:'GET',price_type:entry.priceType,pricing:{configured:true,unit_price:entry.unitPrice,currency:'credits'}},d,entry.checkedAt);return {id:d[0],label:d[1],unitPrice:valid?.unitPrice??null,priceType:valid?.priceType||'',checkedAt:valid?.checkedAt||null};}),warning:value.warning||'',errors:value.errors||[],refreshedAt:value.refreshedAt||null};}
+function create(base,{cli,query=(args,signal)=>jsonQuery.invoke(cli,args,signal,priceQueryOptions),now=()=>new Date().toISOString()}={}){let controller=null,inflight=null,closed=false;return {view:()=>snapshot(base),refresh(){if(inflight)return inflight;if(closed)return Promise.reject(Error('价格查询已停止'));controller=new AbortController();inflight=(async()=>{const old=read(base),box={schema:1,entries:{...old.entries},errors:[],refreshedAt:now()};for(const d of definitions){controller.signal.throwIfAborted();try{const raw=await query(['commands','show',d[2],d[3],'--output','json'],controller.signal);controller.signal.throwIfAborted();const entry=normalized(raw,d,now());if(!entry)throw Error('计费定义尚未确认');box.entries[d[0]]=entry;}catch(error){if(controller.signal.aborted)throw error;box.errors.push({id:d[0],message:d[1]+'：未取得可核实单价，保留旧值。'});}}controller.signal.throwIfAborted();atomic(path.join(readerRoot(base),'price-reference.json'),box);return snapshot(base);})().finally(()=>{inflight=null;controller=null;});return inflight;},close(){closed=true;controller?.abort();}};}
+module.exports={definitions,normalized,snapshot,create};

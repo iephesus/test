@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'">
+<title>Weibo Reader</title><link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="visual.css"><script src="../../lib/post-links.js" defer></script><script src="../../lib/date-range.js" defer></script><script src="form-utils.js" defer></script><script src="user-identity.js" defer></script><script src="data-query.js" defer></script><script src="report-actions.js" defer></script><script src="task-events.js" defer></script><script src="acquisition-feedback.js" defer></script><script src="task-activity.js" defer></script><script src="entity-status.js" defer></script><script src="notices.js" defer></script><script src="home-assets.js"></script>
+<link rel="stylesheet" href="settings-status.css"><script src="recovery.js" defer></script><script src="labels.js" defer></script><script src="relative-time.js" defer></script><script src="history-cost.js" defer></script><script src="history-view.js" defer></script><script src="user-picker.js" defer></script><script src="workspace-channel.js" defer></script><script src="collect-start.js" defer></script><script src="app.js" defer></script><script src="settings-status.js" defer></script><script src="entity-actions.js" defer></script><script src="user-center.js" defer></script><script src="user-management.js" defer></script><script src="post-center.js" defer></script><script src="auto-follow.js" defer></script><script src="subscriptions.js" defer></script><script src="multi-manage.js" defer></script><script src="price-reference.js" defer></script><script src="data-exchange.js" defer></script><script src="local-insights.js" defer></script><script src="date-controls.js" defer></script>
+</head>
+<body>
+<aside class="sidebar">
+ <div class="brand"><div class="brand-icon"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M7 7h18v13H14l-7 5V7Z"/><path d="M12 12h8m-8 4h5"/></svg></div><strong>Weibo Reader</strong></div>
+ <nav aria-label="主导航">
+  <button class="nav-item active" data-view="home"><span class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z" fill="currentColor" stroke="none"/></svg></span>用户</button>
+  <button class="nav-item" data-view="posts-home"><span class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3h16v18H4zM7 7h10M7 11h10M7 15h10M7 18h10"/></svg></span>博文</button>
+  <button class="nav-item" data-view="subscriptions"><span class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5" fill="currentColor" stroke="none"/></svg></span>订阅<span id="subscription-count" class="nav-count">0</span></button>
+  <button class="nav-item" data-view="settings"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6 2.1 2.1M5.6 18.4l2.1-2.1m8.6-8.6 2.1-2.1"/><circle cx="12" cy="12" r="5"/></svg></span>账户与设置</button>
+ </nav>
+ <div class="favorites-heading"><span>特别关注</span><span id="favorite-count">0</span></div><div id="favorite-list" class="favorite-list"></div>
+ <div class="sidebar-note"><span class="small-dot"></span><div><strong>保存在本机</strong></div></div>
+ <div class="sidebar-bottom"><button id="open-output" class="sidebar-link"><svg viewBox="0 0 24 24"><path d="M3 6h7l2 2h9v12H3z"/></svg>打开输出文件夹<span>↗</span></button><div class="version">Weibo Reader<span id="app-version" hidden></span></div></div>
+</aside>
+<main><div class="global-header"><button id="global-search-entry" class="button secondary" type="button">全局本地搜索</button><button id="active-task" class="text-button" hidden>任务进行中 · 返回查看</button><button id="ready-shortcut" class="text-button" hidden>报告已就绪 · 立即阅读 ↗</button><div class="balance-chip"><span>可用余额</span><strong id="top-balance">尚未查询</strong><span id="top-balance-note"></span><button id="refresh-balance" title="免费刷新余额" aria-label="刷新余额">⟳</button><button id="balance-login" class="text-button" hidden>登录</button></div></div>
+ <section id="recovery-notice" class="recovery-notice" role="status" hidden><div id="recovery-copy"></div><details><summary>查看恢复原因</summary><ul id="recovery-issues"></ul></details><div class="settings-actions"><button id="recovery-retry" type="button" class="button secondary">重试本地恢复</button><button id="recovery-copy-diagnostic" type="button" class="button secondary">复制恢复诊断</button></div></section>
+ <section id="view-search" class="view" hidden>
+  <header class="search-page-header">
+   <button id="global-search-back" class="button secondary">返回用户列表</button>
+   <h1>全局本地搜索</h1>
+  </header>
+  <form id="global-search-form" class="settings-card">
+   <input id="global-search-text" type="search" maxlength="4096" aria-label="全局关键词" placeholder="搜索所有已保存内容中的关键词">
+   <div class="field-row">
+    <div class="field grow"><label for="global-search-author">发言作者（昵称或 UID）</label><input id="global-search-author" maxlength="200"></div>
+    <div class="field grow"><label for="global-search-owner">数据所属对象</label><select id="global-search-owner"><option value="">全部所属对象</option></select></div>
+   </div>
+   <div class="field-row">
+    <div class="field grow"><label for="global-search-from">起始日期（可选）</label><input id="global-search-from" type="date" aria-description="可留空；填写时包含所选当天"></div>
+    <div class="field grow"><label for="global-search-to">截止日期（可选）</label><input id="global-search-to" type="date" aria-description="可留空；填写时包含所选当天"></div>
+   </div>
+   <div class="global-search-footer">
+    <div class="global-search-actions">
+     <button class="button primary compact" type="submit">搜索本地数据</button>
+     <button id="global-search-cancel" class="button secondary" type="button">取消</button>
+    </div>
+    <p class="field-hint">条件取交集；日期可只填一端，均包含所选当天。摘要仅用于定位，查看对话会生成带上下文的 HTML。0 credits。</p>
+   </div>
+  </form>
+  <p id="global-search-status" role="status">尚未搜索，请输入关键词。</p>
+  <div id="global-search-results"></div>
+  <div id="global-search-pages" class="settings-actions"></div>
+ </section>
+ <section id="view-home" class="view"><header class="page-header"><div><div class="eyebrow">用户</div><h1>从一个用户开始阅读</h1></div></header><div class="settings-card home-controls"><div class="home-control-group"><label for="home-search">查找用户</label><input id="home-search" type="search" placeholder="备注、昵称或 UID" aria-label="搜索用户"></div><form id="home-add" class="home-control-group"><label for="home-add-uid">添加用户</label><div class="field-row"><input id="home-add-uid" placeholder="UID 或用户主页链接" aria-label="添加用户 UID"><button class="button secondary" type="submit">添加用户</button></div></form></div><div id="user-list-toolbar" class="entity-list-toolbar"><div class="user-filters"><button data-home-filter="all" class="text-button active">全部用户</button><button data-home-filter="favorites" class="text-button">关注用户</button><button data-home-filter="unread" class="text-button">未读</button></div></div><div id="user-list-state" class="home-load-status" role="status">正在读取本地用户数据…</div><div id="home-users" class="home-users"></div><p id="home-empty" hidden class="empty-state">没有匹配的用户，可以添加 UID 或调整搜索。</p></section>
+ <section id="view-create" class="view" hidden>
+
+  <button id="user-home-back" class="button secondary page-back-button" hidden aria-label="返回用户列表">‹ 返回用户列表</button>  <header class="page-header" hidden><div><div class="eyebrow">数据</div><h1 id="user-page-title">用户数据</h1><p id="user-page-subtitle">获取所需数据，或直接查看本地会话与导出报告。</p></div><span class="local-badge"><i></i>本地应用</span></header><section id="user-identity" class="user-identity" hidden><div id="current-user-identity"></div><div id="user-page-actions" class="user-page-actions"></div></section>
+  <section id="completion-banner" class="completion-banner" hidden><div class="completion-symbol">✓</div><div class="completion-copy"><h2 id="completion-title">报告已生成</h2><p id="completion-meta"></p><div id="current-reports"></div></div><div class="completion-actions"><button id="completion-read" class="button primary">立即阅读</button><button id="completion-new" class="button secondary" hidden>查看本次新增</button><button id="continue-update" class="button secondary" hidden>继续读取（沿用上限）</button><button id="completion-library" class="text-button">查看已生成报告</button></div></section>
+  <div class="entity-overview">
+   <p id="entity-inventory" class="entity-inventory" role="status" hidden></p>
+   <button id="inventory-details" class="entity-status-button" type="button" hidden>统计详情</button>
+   <button id="running-owner" class="entity-status-button entity-running-status" type="button" hidden>正在获取</button>
+   <button id="profile-notice-jump" class="entity-status-button" type="button" hidden>资料提示</button>
+   <span id="detail-continuation"></span>
+  </div>
+  <div class="query-layout">
+   <div class="query-main">
+   <form id="query-form" class="query-card" novalidate>
+    <div id="category-tabs" class="segments" role="group" aria-label="内容类型"><button type="button" class="active" data-category="users">用户互动</button><button type="button" hidden data-category="post">微博评论</button><button type="button" data-category="posts">用户微博</button></div>
+    <div class="operation-toolbar"><div class="segments" role="group" aria-label="数据操作"><button type="button" class="active" data-task="sync">获取数据</button><button type="button" data-task="report">导出数据</button></div><button type="button" id="quick-check" class="button secondary" title="只获取上次成功位置之后的新增；没有可靠起点时按当前上限首次读取，不使用日期范围。">快速检查更新</button></div>
+    <div class="field" id="mode-field"><label for="mode">互动内容</label><select id="mode"><option value="comments-both">发出和收到的评论</option><option value="comments-sent">发出的评论</option><option value="comments-received">收到的评论</option><option value="mentions-in-comments">被 @ 的评论</option><option value="mentions-in-posts">被 @ 的微博</option></select></div>
+    <div class="field" id="user-target-field"><div class="label-row"><label id="target-label" for="target">目标用户</label><span id="target-kind">UID 或用户主页链接</span></div><input id="target" aria-describedby="target-kind" autocomplete="off" spellcheck="false" placeholder="例如 1000000021，或粘贴用户主页链接" required><div class="user-chooser"><button type="button" id="choose-user" class="chooser-trigger" aria-expanded="false">搜索已保存的用户…<span>⌄</span></button><button type="button" id="favorite-target" class="star-target" aria-label="特别关注目标用户" title="特别关注目标用户">☆</button><div id="user-popover" class="user-popover" hidden><input type="search" id="user-search" placeholder="检索昵称或 UID" autocomplete="off" aria-label="检索已保存用户"><div class="picker-tabs"><button type="button" id="picker-all" class="active">全部用户</button><button type="button" id="picker-favorites">特别关注</button></div><div id="user-results" role="listbox" aria-label="用户搜索结果"></div><div id="picker-empty" hidden>没有匹配的用户</div></div></div></div>
+    <div class="field" id="sync-options"><div id="date-range-option"><label class="check-line"><input type="checkbox" role="switch" id="date-range-enabled">指定日期范围</label></div><details id="acquisition-more" class="advanced"><summary>获取说明与历史</summary><p class="field-hint" id="update-operation-note"></p><p class="field-hint" id="database-time"></p><div class="acquisition-actions"><button type="button" id="database-history" class="text-button">查看获取历史</button><button type="button" id="follow-current-user" class="text-button">设置订阅…</button></div></details></div>
+    <div class="field" id="report-options" hidden><div id="report-peer-field" class="field"><label for="report-peer">互动对象（可选）</label><input id="report-peer" list="report-peer-options" placeholder="UID 或用户主页链接；留空为全部互动" autocomplete="off"><datalist id="report-peer-options"></datalist><p class="field-hint">仅导出与该用户明确相关的本地互动；必要前文保留，不额外取数。</p></div><label class="check-line"><input type="checkbox" role="switch" id="view-range-enabled">指定日期范围</label><label class="check-line"><input type="checkbox" role="switch" id="mark-unread" checked>标记未读记录</label></div>
+    <div class="field-row"><div class="field grow"><label id="limit-label" for="limit">本次取数上限</label><input id="limit" aria-describedby="quota-hint cost-warning" type="text" inputmode="numeric" value="50" placeholder="例如 300"></div><label class="check-line unlimited-line"><input type="checkbox" id="unlimited"><span id="unlimited-label">取完全部新增（可能持续计费）</span></label></div>
+    <p id="cost-warning" class="cost-warning" hidden></p><p id="quota-hint" class="field-hint">发出、收到各最多 25 条；两类评论分别取数。</p>
+    <div id="post-range" class="field-row" hidden><div class="field grow"><label for="from">起始日期（可选）</label><input type="date" id="from"></div><div class="field grow"><label for="to">截止日期（可选）</label><input type="date" id="to"></div></div>
+    <div id="post-extras" hidden><label class="check-line"><input type="checkbox" id="download-images">将微博图片保存到本机</label><label class="check-line"><input type="checkbox" id="full-text">补取被截断的全文 <span class="muted">可能额外计费</span></label></div>
+    <details class="advanced" id="request-settings"><summary>高级选项<span>返回预算与分页</span></summary><div id="recheck-field" class="field" hidden><label class="check-line"><input type="checkbox" id="recheck">重新核查已有记录</label><p class="field-hint">跳过缓存重新请求，旧数据再次返回也可能计费；旧快照保留。</p></div><div class="field-row"><div class="field grow" id="return-budget-field"><label for="return-budget">每方向新增返回预算</label><input id="return-budget" type="text" inputmode="numeric" placeholder="默认等于该方向覆盖额度"><p class="field-hint">独立于覆盖条数；重复返回、定位也占预算。all 为不限。</p></div></div><div class="field-row"><div class="field grow"><label for="pages">每接口最多新增请求</label><input id="pages" type="text" inputmode="numeric" placeholder="留空不限制"></div><div class="field grow"><label for="page-size">每页最多条数</label><input id="page-size" type="text" inputmode="numeric" placeholder="200"></div></div><div class="field-row"><div class="field grow" id="seek-field"><label for="seek-limit">日期定位探测上限</label><input id="seek-limit" value="80" type="text" inputmode="numeric"></div><div class="field grow" id="empty-field" hidden><label for="empty-limit">连续空窗口上限</label><input id="empty-limit" value="20" type="text" inputmode="numeric"></div></div><label class="check-line" id="history-check"><input id="history-recovery" type="checkbox" checked>保留历史补全与本地会话补充</label><label class="check-line"><input id="verbose" type="checkbox">显示详细采集日志</label><button id="preview" type="button" class="button secondary">检查设置</button></details>
+    <div id="form-error" class="inline-error" role="alert" hidden></div>
+    <div class="form-actions" hidden><span id="query-note">首次没有缓存时，会先建立读取基线。</span></div>
+   <section id="local-results" class="local-results" hidden><div class="local-results-heading"><div><h2 id="local-results-title">本地互动</h2><p id="local-counts" aria-live="polite">请选择用户查看本地数据。</p><p id="local-time-range" class="field-hint"></p><p id="local-scope-note" class="field-hint">引用上下文不计正式条数；本地数据不代表完整线上历史。</p></div></div></section>
+   </form>
+  <details id="coverage-timeline" class="settings-card coverage-timeline" hidden>
+   <summary>互动数据时间轴</summary>
+   <div class="coverage-content">
+    <p class="coverage-intro">查看本地保存过哪些日期的互动，以及是否还有待补区间或续读任务。有记录的日期不代表当天已全部获取。</p>
+    <div class="coverage-toolbar">
+     <div class="coverage-dates">
+      <div class="field"><label for="coverage-from">起始日期（可选）</label><input id="coverage-from" type="date"></div>
+      <div class="field"><label for="coverage-to">截止日期（可选）</label><input id="coverage-to" type="date"></div>
+     </div>
+     <div class="coverage-actions"><button id="coverage-refresh" type="button" class="button secondary">查看范围</button><button id="coverage-export" type="button" class="button secondary">导出此范围</button></div>
+    </div>
+    <p id="coverage-status" class="field-hint" role="status">留空显示全部已保存时间。仅使用本地数据。</p>
+    <div id="coverage-body"></div>
+   </div>
+  </details>
+   </div>
+
+   <aside class="task-column">
+    <section id="task-card" class="task-card"><div class="task-heading"><h2 id="task-panel-heading">本次任务</h2><span id="status-pill" class="status-pill" role="status" aria-live="polite">待开始</span></div><p id="task-title" class="task-title">发出和收到的评论</p><div id="task-target" class="task-target" hidden></div><div class="task-rule"></div><div class="task-meta"><span>读取方式</span><strong id="summary-policy">增量更新</strong></div>
+     <div class="task-meta task-count"><span id="summary-limit-label">本次取数上限</span><strong id="summary-limit" aria-live="polite" aria-atomic="true" aria-labelledby="summary-limit-label">最多 50 条</strong></div>
+     <div class="task-meta"><span>消耗估算（credits）</span><strong id="cost">—</strong></div><div class="task-meta"><span id="balance-label">剩余余额</span><strong id="balance">尚未查询</strong></div><div class="task-meta"><span id="returned-label">接口返回条数</span><strong id="returned">—</strong></div><div class="progress-label"><span id="progress-stage">等待开始</span><strong id="progress-ratio"></strong></div><div class="task-progress-meter"><div id="progress-track" class="progress-track" hidden role="progressbar" aria-label="报告生成进度" aria-valuemin="0" aria-valuemax="100"><div id="progress-fill"></div></div></div><div class="task-progress-copy"><p id="result-gap-notice" role="status" hidden>新旧数据之间有待补区间。</p><p id="result-missing-bodies" hidden></p><p id="progress-message" class="progress-message" aria-live="polite">点击“开始生成”后才会读取数据。</p><button id="progress-details" class="entity-status-button" type="button" hidden>详情</button></div>
+     <button id="start" class="button primary">开始生成<span>↗</span></button><button id="stop" class="button danger" hidden>停止读取</button><button id="report-folder" class="button secondary" type="button" hidden>打开文件夹 ↗</button><p id="billing-note" class="billing-note">旧缓存复用不新增取数费用。<br>实际扣费以服务端为准。</p></section>
+   </aside>
+  </div>
+
+ <section id="context-reports" class="settings-card"><div class="context-report-heading"><h2>最近报告 <small>每位用户／博文各保留 1 份</small></h2><div id="context-report-state" class="context-report-state" hidden></div></div><div id="context-report-list"></div></section>
+  <section id="run-activity" class="activity" hidden><button id="toggle-log" aria-expanded="false"><span>›</span>运行详情<span id="log-count" class="muted">0 条</span></button><div id="log-area" hidden><pre id="logs" tabindex="0"></pre><button id="copy-log" class="text-button">复制日志</button></div></section>
+  <section class="entity-detail-notices">
+   <p id="acquisition-feedback" class="acquisition-feedback" role="status" hidden></p>
+   <section id="user-task-result" class="resume-notice" role="status" tabindex="-1" hidden></section>
+  </section>
+ </section>
+ <section id="view-posts-home" class="view" hidden><header class="page-header"><div><div class="eyebrow">博文</div><h1>围绕一条博文阅读评论</h1></div></header><section class="settings-card home-controls"><div class="home-control-group"><label for="post-search">查找博文</label><input id="post-search" type="search" placeholder="备注、ID、作者或正文" aria-label="搜索博文"></div><form id="post-add" class="home-control-group"><label for="post-add-target">添加博文</label><div class="field-row"><input id="post-add-target" placeholder="微博 ID 或微博链接" aria-label="添加博文"><button class="button secondary" type="submit">添加博文</button></div></form></section><div id="post-list-toolbar" class="entity-list-toolbar"><div class="post-filters"><button data-post-filter="all" class="text-button active" aria-pressed="true">全部博文</button><button data-post-filter="favorites" class="text-button" aria-pressed="false">关注博文</button></div></div><div id="post-list-state" class="home-load-status" role="status">正在读取本地博文数据…</div><div id="post-home-list" class="home-users"></div><p id="post-home-empty" hidden class="empty-state">还没有博文，可以先添加链接；添加不会自动获取评论。</p></section>
+ <section id="view-history" class="view" hidden><header class="page-header"><div><div class="eyebrow">获取历史</div><h1 id="history-title">获取记录</h1><p id="history-summary">读取本地历史，不消耗 credits。</p></div><button id="history-back" class="button secondary">返回</button></header><div class="settings-card history-ledger"><div id="history-cost-summary" class="history-cost-summary" hidden aria-live="polite"></div><div id="history-original-tasks"></div><div id="history-rows"></div><p class="field-hint">余额差额为操作前后服务账户的余额变化。其他并行使用、充值或延迟结算可能影响差额；没有可靠实扣依据时保留“待核对”，不将估算当作实际扣费。日期范围包含所选当天。</p></div></section>
+ <section id="view-subscriptions" class="view" hidden><header class="page-header"><div><div class="eyebrow">订阅</div><h1>管理订阅</h1><p>关闭窗口后订阅继续运行；退出应用后停止。</p></div><button id="subscriptions-refresh" class="button secondary">刷新状态</button></header><section class="settings-card subscription-toolbar"><input id="subscription-search" type="search" placeholder="搜索昵称、UID、博文或微博 ID" aria-label="搜索订阅"><div class="settings-actions"><button data-subscription-type="all" class="text-button active">全部</button><button data-subscription-type="user" class="text-button">用户</button><button data-subscription-type="post" class="text-button">博文</button></div><p class="field-hint">从用户或博文页开启订阅。每日预算按订阅对象分别设置。</p></section><div id="subscription-list"></div><p id="subscription-empty" class="empty-state">还没有订阅；可进入用户或博文页，开启“订阅”开关。</p></section>
+ <section id="view-follow" class="view" hidden><div class="follow-panel"><header class="page-header"><div><div class="eyebrow">当前对象</div><h1>订阅</h1><p id="follow-runtime">关闭窗口后继续跟进；退出应用后停止。</p></div><button id="follow-back" class="text-button">返回订阅列表</button></header>
+  <div id="follow-no-user" class="settings-card"><p>请先从用户列表选择用户。</p><button id="follow-select-user" class="button secondary">打开用户列表</button></div>
+  <div id="follow-editor" hidden><section class="settings-card"><div class="follow-card-heading"><div id="follow-identity"></div><div class="follow-state-actions"><span id="follow-status" class="status-pill"></span><button id="follow-refresh" class="text-button" title="刷新状态" aria-label="刷新订阅状态">⟳</button></div></div><p id="follow-status-note" class="field-hint"></p><div id="follow-service-block" hidden></div><div id="follow-facts" class="follow-facts"></div></section>
+  <section class="settings-card" id="follow-content-card"><h2>订阅内容</h2><div class="field"><label for="follow-mode">互动方向</label><select id="follow-mode"><option value="both">双向评论</option><option value="sent">发出的评论</option><option value="received">收到的评论</option></select></div><details class="follow-help"><summary>方向与读取进度</summary><p>发出、收到分别续读，缺口和成功位置独立保留。双向共用每日预算；每次返回额度按发出向上取半、收到向下取半分配。</p></details></section>
+  <section class="settings-card"><h2>检查节奏</h2><div class="field"><label for="follow-frequency">检查方式</label><select id="follow-frequency"><option value="adaptive">自动调节</option><option value="fixed">固定间隔</option></select></div><div id="follow-auto-field" class="field"><p class="field-label">自动检查间隔</p><p class="field-hint">1 → 3 → 5 → 10 → 15 → 30 分钟</p></div><div id="follow-trigger-field" class="field"><label for="follow-acceleration-trigger">调节依据</label><select id="follow-acceleration-trigger"><option value="sent">本人发出新评论</option><option value="received">收到新评论</option><option value="any">任一方向有新评论</option></select><p class="field-hint">仅影响检查节奏，获取内容与费用仍按订阅设置执行。</p></div><p id="follow-trigger-note" class="field-hint" hidden></p><div id="follow-fixed-field" class="field" hidden><label for="follow-interval">间隔分钟数</label><input id="follow-interval" type="number" min="1" max="1440" value="15"></div><p id="follow-frequency-note" class="field-hint"></p><details id="follow-frequency-help" class="follow-help"><summary>自动调节如何变化</summary><p>新开启的自动订阅从每 1 分钟检查开始。调节依据出现实际新保存的近期评论时，回到 1 分钟；连续两次成功检查且足以判断最新情况、没有新增时，按 1、3、5、10、15、30 分钟减慢一档，最长 30 分钟。选择“任一方向”时，两个方向都检查成功且无新增才计一次。失败、未完成、未检查的方向不算安静检查。只有当轮实际新保存的近期独立评论会触发加速；初始化、历史补录、重放和重复内容不会触发。用户和独立博文共用此阶梯；访问保护、恢复等待和预算限制仍优先，固定间隔保留。</p></details></section>
+  <section class="settings-card"><h2>费用限制</h2><div class="field"><label for="follow-budget">每日 credits 预算</label><input id="follow-budget" type="text" inputmode="decimal" value="1000"></div><div class="follow-budget-usage"><p id="follow-today" class="field-hint">今日费用状态将在保存设置后显示。</p><button type="button" id="follow-reset-budget" class="button secondary" hidden>重置当前额度</button></div><details class="follow-help"><summary>每日预算与计费说明</summary><p id="follow-budget-period"></p><p>仅统计订阅，手动获取另计。按接口真实返回与计费规则处理，重复和核对返回也可能收费。估算、余额变化与实际扣费分开记录；没有可逐笔核验的流水时不标作实扣。达到预算后保留续读位置。</p></details><details id="follow-advanced" class="follow-help"><summary>高级设置</summary><div class="field"><label for="follow-limit">每次检查的返回条数上限</label><input id="follow-limit" type="text" inputmode="numeric" value="100"></div><p class="field-hint">微博 CLI 每轮最多返回 100 条。双向共用上限、分别分配额度。已有记录点时只检查之后的新增，空返回为 0 credits。超过上限的区间留待手动补齐。</p><details><summary>接口技术详情</summary><p>仅使用已核实支持并遵守 since_id / max_id 的接口；价格或边界不明时停止请求。订阅不回退读取未知旧历史。</p></details></details></section>
+  <div id="follow-error" class="inline-error" role="alert" hidden></div><p id="follow-draft-note" class="field-hint" hidden>设置尚未保存；改动不会立即启动请求。当前检查使用启动时设置，新设置从下一轮生效。</p><div class="settings-actions follow-buttons"><button id="follow-primary" class="button primary compact">开启订阅</button><button id="follow-save-only" class="button secondary">仅保存设置</button><button id="follow-toggle" class="button secondary" hidden>恢复订阅</button></div>
+  <details class="settings-card follow-technical"><summary>费用与检查详情</summary><div id="follow-details"></div><button id="follow-history" class="text-button">获取历史</button></details></div></div>
+ </section>
+ <section id="view-settings" class="view" hidden>
+  <header class="page-header"><div><div class="eyebrow">账户与设置</div><h1>账户与数据</h1></div></header>
+  <div id="settings-sections" class="settings-sections">
+   <div class="settings-account-grid">
+    <section id="service-account-card" class="settings-card settings-account-card service-account-card">
+     <h2>WeiboCLI 服务账户</h2><p>用于通过 WeiboCLI 获取数据。</p>
+     <div id="service-account-panel" class="settings-account-panel"><div id="service-account-status" class="settings-status-lane">
+      <div id="account-info" class="account-info settings-status-text" role="status">尚未查询账户信息。查询余额不会读取微博内容。</div>
+      <span id="service-account-brief" class="settings-status-text" role="status" hidden></span>
+      <div id="service-login-status" role="status" aria-live="polite" hidden><strong id="service-login-heading"></strong><span id="service-login-message" class="settings-status-text"></span><button id="service-login-cancel" class="text-button settings-status-action" type="button" hidden>取消登录</button></div>
+     </div></div>
+     <div class="settings-actions settings-account-primary"><button id="login" class="button primary compact">在浏览器登录 / 授权</button><button id="check-account" class="button secondary">查询账户与余额</button></div>
+     <div class="settings-actions settings-account-secondary"><button id="service-website" class="text-button settings-quiet">打开 WeiboCLI 网站 ↗</button></div>
+     <p class="field-hint settings-privacy">在浏览器完成授权，应用不保存密码。</p>
+    </section>
+   </div>
+   <section class="settings-card settings-workspace">
+    <h2>数据目录</h2><p>切换目录不会移动或删除旧数据。</p>
+    <div id="workspace-path" class="workspace-path"></div>
+    <div class="settings-actions"><button id="choose-workspace" class="button secondary">选择数据目录…</button><button id="settings-open-output" class="text-button settings-quiet">打开输出文件夹 ↗</button></div>
+   </section>
+   <section class="settings-card settings-data">
+    <h2>本地数据与报告</h2><p>导出可合并的数据包，0 credits。不含登录信息、订阅、私人备注或已读状态。</p>
+    <div class="settings-actions"><button id="data-export" class="button secondary">导出数据包…</button><button id="data-import" class="button secondary">导入并合并…</button><div id="settings-data-status" class="settings-status-lane"><p id="exchange-status" class="field-hint settings-status-text" role="status"></p><p id="cleanup-result" class="field-hint settings-status-text" aria-live="polite"></p></div></div>
+    <div class="settings-maintenance"><div><h3>自动清理旧报告</h3><p class="field-hint">每位用户或博文保留最新 1 份报告。只清理可再生成的旧报告，原始数据、历史与续读进度保留。</p></div><button id="cleanup-reports" class="text-button settings-quiet">立即清理旧报告</button></div>
+    <div hidden><select id="report-keep"><option value="1">最新 1 份</option></select><input id="report-keep-custom"><button id="save-retention"></button></div>
+   </section>
+   <details id="price-reference" class="settings-card price-reference"><summary>费用参考 · credits 价目表</summary><p>本地查看与导出：<strong>0 credits</strong>。联网取数按接口计费，发出和收到分别计算。</p><div class="settings-actions"><button id="refresh-prices" class="button secondary">查询最新单价</button><div id="price-status-lane" class="settings-status-lane"><span id="price-reference-status" class="field-hint settings-status-text" aria-live="polite">优先显示本地已确认价格。</span></div></div><div class="price-reference-scroll"><table><thead><tr><th>功能</th><th>标准单价</th><th>价格确认时间</th></tr></thead><tbody id="price-reference-rows"></tbody></table></div><p class="field-hint">重复返回和定位核对也可能收费，不按报告去重条数计算。缓存复用不增费；体验额度和实际扣费以服务端为准。</p></details>
+  </div>
+  <div class="settings-footnote">无法保证还原线上不可见或从未保存的内容。</div>
+ </section>
+</main>
+<div id="toast" role="status" hidden></div>
+<script defer src="feedback.js"></script>
+</body></html>

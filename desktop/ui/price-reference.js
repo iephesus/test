@@ -1,0 +1,8 @@
+'use strict';
+(()=>{
+ let requestId='',root='',loaded=false;
+ const panel=$('price-reference'),body=$('price-reference-rows'),message=$('price-reference-status'),refresh=$('refresh-prices');
+ function request(update){window.ReaderNotices?.reset(message);message.hidden=false;requestId=crypto.randomUUID();root=state.workspace;message.textContent=update?'正在查询计费说明，不获取互动正文…':'正在读取本地价格参考…';refresh.disabled=true;send({action:update?'pricingRefresh':'pricingReference',requestId});}
+ panel.addEventListener('toggle',()=>{if(panel.open&&!loaded)request(false);});refresh.onclick=()=>request(true);
+ window.priceReferenceReceive=event=>{if(event.type==='library'&&root&&root!==event.workspace){loaded=false;requestId='';body.replaceChildren();if(panel.open)queueMicrotask(()=>request(false));return;}if(!['pricingReference','pricingError'].includes(event.type)||event.requestId!==requestId||root!==state.workspace)return;refresh.disabled=false;window.ReaderNotices?.reset(message);message.hidden=false;if(event.type==='pricingError'){message.textContent=event.message||'价格查询失败，已保存价格保留。';window.ReaderNotices?.decorate(message,{scope:root+'|prices',key:requestId});return;}loaded=true;body.replaceChildren();for(const r of event.rows||[]){const tr=node('tr');let price='待查询';if(r.unitPrice!=null){const unit=r.priceType==='per_call'?'次请求':'条返回记录';price=numeric(r.unitPrice)+' credits / '+unit;}for(const value of [r.label,price,r.checkedAt?dateText(Date.parse(r.checkedAt)):'尚未确认'])tr.append(node('td','',value));body.append(tr);}message.textContent=event.warning||(event.errors?.length?'部分单价未更新，仍显示已确认的缓存价格。':'以上为最近查询的标准单价，实际计费与体验额度以服务端为准。');if(event.warning||event.errors?.length)window.ReaderNotices?.decorate(message,{scope:root+'|prices',key:requestId});};
+})();

@@ -1,0 +1,107 @@
+{
+  "name": "weibo-reader",
+  "version": "1.0.0",
+  "description": "Weibo comment archiving and offline reading",
+  "main": "desktop/win/main.js",
+  "scripts": {
+    "test": "node --test test/*.test.cjs",
+    "start": "node weibo_cli.js",
+    "desktop:build": "node scripts/build-desktop.js",
+    "desktop:open": "open \"dist/Weibo Reader.app\"",
+    "desktop:package": "node scripts/package-desktop.js",
+    "desktop:win": "electron .",
+    "desktop:win:package": "node scripts/package-win.cjs",
+    "postinstall": "node scripts/fix-weibo-cli-open-browser.cjs"
+  },
+  "keywords": [],
+  "author": "selnokk",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@weibo-ai/weibo-cli": "^0.9.8",
+    "parse5": "7.3.0"
+  },
+  "devDependencies": {
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "selnokk.weibo.reader",
+    "productName": "Weibo Reader",
+    "directories": {
+      "output": "dist-win"
+    },
+    "compression": "maximum",
+    "npmRebuild": false,
+    "afterPack": "./scripts/after-pack-win.cjs",
+    "electronLanguages": [
+      "en-US",
+      "zh-CN"
+    ],
+    "files": [
+      "desktop/**/*",
+      "lib/**/*",
+      "scripts/app-version.js",
+      "weibo_cli.js",
+      "package.json",
+      "weibo_reader_user_guide.md",
+      "LICENSE",
+      "node_modules/**/*",
+      "!desktop/**/*.swift",
+      "!desktop/**/*.{xcodeproj,xcworkspace,pbxproj,entitlements}",
+      "!desktop/FeedbackDiagnostics.swift",
+      "!**/*.{map,ts,tsx}",
+      "!**/README*",
+      "!**/CHANGELOG*",
+      "!WINDOWS.md",
+      "!AGENTS.md",
+      "!WEIBO-CLI-API.md",
+      "!**/test/**",
+      "!**/tests/**",
+      "!**/__tests__/**",
+      "!**/docs/**",
+      "!**/example/**",
+      "!**/examples/**",
+      "!node_modules/.bin/**",
+      "!node_modules/**/*.md",
+      "!node_modules/**/{LICENSE,LICENCE,license,licence,COPYING,AUTHORS,NOTICE}",
+      "!node_modules/**/{LICENSE,LICENCE,license,licence}.*",
+      "!node_modules/electron/**",
+      "!node_modules/electron-builder/**",
+      "!node_modules/app-builder-*/**"
+    ],
+    "asar": false,
+    "extraMetadata": {
+      "main": "desktop/win/main.js"
+    },
+    "win": {
+      "signAndEditExecutable": false,
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "Weibo-Reader-${version}-${arch}-${os}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "differentialPackage": false,
+      "shortcutName": "Weibo Reader",
+      "artifactName": "Weibo-Reader-Setup-${version}-${arch}.exe"
+    },
+    "portable": {
+      "artifactName": "Weibo-Reader-Portable-${version}-${arch}.exe"
+    }
+  },
+  "buildNumber": 2025
+}
