@@ -6,6 +6,14 @@ const { spawnSync } = require('node:child_process');
 const path = require('node:path');
 
 const root = path.resolve(__dirname, '..');
+const fs = require('node:fs');
+const iconPath = path.join(root, 'build', 'icon.ico');
+if (!fs.existsSync(iconPath)) {
+  const made = spawnSync(process.execPath, [path.join(root, 'scripts', 'make-win-icon.cjs')], {
+    cwd: root, stdio: 'inherit'
+  });
+  if (made.status) process.exit(made.status == null ? 1 : made.status);
+}
 const link = String(process.env.CSC_LINK || process.env.WIN_CSC_LINK || '').trim();
 const password = String(process.env.CSC_KEY_PASSWORD || process.env.WIN_CSC_KEY_PASSWORD || '');
 const signed = !!link;

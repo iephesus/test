@@ -6,91 +6,8 @@ const relativeTime = (value, now) => ReaderRelativeTime.relativeTime(value, now)
 const timeSpan = value => ReaderRelativeTime.timeSpan(node, value);
 const state = { task: 'sync', database: [], taskDrafts: { sync: { limit: '50', unlimited: false }, report: { limit: '200', unlimited: false } }, view: 'home', category: 'users', policy: 'cache', updateOperation: 'regular', busy: false, starting: false, activeId: null, jobKind: '', logs: [], reports: [], accounts: [], drafts: {}, favorites: [], workspace: '', account: null, credits: null, currentReports: [], userFilter: '', pickerFavorites: false, summary: null, sources: new Map(), plan: [], gapWarnings: [], availability: new Map(), continuation: false, returnLimited: false, lastQuery: null, toastTimer: null };
 state.homeLoading={users:{status:'loading'},posts:{status:'loading'},reports:{status:'loading'},subscriptions:{status:'loading'}};
-function renderHomeLoadStatus(section,id,retry=()=>send({action:'library'})){
- const value=state.homeLoading[section]||{status:'ready'},box=$(id);if(!box)return value.status;
- box.hidden=value.status==='ready';box.replaceChildren();box.setAttribute('role',value.status==='error'?'alert':'status');
- const subject={users:'用户',posts:'博文',subscriptions:'订阅'}[section]||'资料';
- if(!box.hidden){box.append(node('span','',value.status==='error'?'本地列表未能读取：'+(value.message||'请重试'):'正在读取本地'+subject+'数据…'));if(value.status==='error')box.append(button('重试读取','button secondary',retry));}
- return value.status;
-}
-const homeSections=['users','posts','reports','subscriptions'];
-const homePayload={homeUsers:'users',postsHome:'posts',libraryData:'reports',followState:'subscriptions'};
 const homeSnapshots=ReaderHomeAssets.createSnapshotReader(event=>window.weiboReceive(event));
 let historyView = null;
-const ownerUnread=new Map();
-let startupPaintQueued=false;
-function noteStartupList(){
- if(startupPaintQueued||!window.webkit?.messageHandlers?.weibo)return;
- const workspace=state.workspace;
- startupPaintQueued=true;
- requestAnimationFrame(()=>requestAnimationFrame(()=>{
-  if(workspace!==state.workspace){startupPaintQueued=false;noteStartupList();return;}
-  const home=$('view-home');
-  const empty=!state.accounts.length&&state.homeLoading.users.status==='ready';
-  if(!home.hidden&&($('home-users').querySelector('.user-open:not([disabled])')||empty))send({action:'startupListReady'});
-  else startupPaintQueued=false;
- }));
-}
-function syncOwnerUnread(event){
- const changed=new Set(),revision=Number.isSafeInteger(event.readingRevision)?event.readingRevision:0;
- function storeUnread(kind,id,count,unavailable,write,rowRevision=revision){
-  if(typeof id!=='string'||!/^[1-9]\d{4,19}$/.test(id)||!Number.isSafeInteger(count)&&count!==null&&!unavailable)return;
-  const key=kind+':'+id,previous=ownerUnread.get(key);
-  if(previous&&rowRevision<previous.revision){write(previous);return;}
-  const value={count,unavailable:!!unavailable,revision:rowRevision};
-  ownerUnread.set(key,value);
-  if(!previous||previous.count!==value.count||previous.unavailable!==value.unavailable)changed.add(key);
- }
- const home=(kind,row)=>storeUnread(kind,kind==='post'?row.postId:row.uid,row.unread,row.unreadUnavailable,value=>{
-  row.unread=value.count;row.unreadUnavailable=value.unavailable;
- },Number.isSafeInteger(row.readingRevision)?row.readingRevision:revision);
- const follow=row=>storeUnread(row.targetKind||'user',row.postId||row.uid,row.inbox?.unread,row.inbox?.unavailable,value=>{
-  row.inbox={...row.inbox,unread:value.count,unavailable:value.unavailable};
- });
- if(event.type==='homeUsers')for(const row of event.users||[])home('user',row);
- if(event.type==='postsHome')for(const row of event.posts||[])home('post',row);
- if(event.type==='followState')for(const row of event.entries||[])follow(row);
- if(event.type==='reportMarkedRead'){
-  const kind=event.targetKind==='post'?'post':'user',id=kind==='post'?event.postId:event.uid;
-  if(Number.isSafeInteger(event.unread)&&event.unread>=0)storeUnread(kind,id,event.unread,false,()=>{});
- }
- if(!changed.size)return changed;
- for(const [kind,rows] of [['user',state.homeUsers],['post',state.posts]])for(const row of rows||[]){
-  const key=kind+':'+(kind==='post'?row.postId:row.uid),value=ownerUnread.get(key);
-  if(changed.has(key)){row.unread=value.count;row.unreadUnavailable=value.unavailable;}
- }
- for(const row of state.subscriptions||[]){
-  const key=(row.targetKind||'user')+':'+(row.postId||row.uid),value=ownerUnread.get(key);
-  if(changed.has(key))row.inbox={...row.inbox,unread:value.count,unavailable:value.unavailable};
- }
- return changed;
-}
-function retainsHomeSnapshot(event){return !!(event.partial&&state.workspace&&state.workspace===event.workspace&&!event.homeBlocked&&!state.homeBlocked);}
-function homeLoadEvent(event,retain){
- if(event.type==='library'){
-  const clear=state.workspace!==event.workspace||event.homeBlocked;
-  if(clear||state.bootstrapId!==(event.bootstrapId)){homeSnapshots.reset();historyView?.reset();}
-  if(clear){ownerUnread.clear();state.homeUsers=[];state.posts=[];state.postAuthors={};state.database=[];state.reports=[];state.homeAssetSnapshots={};}
-  state.bootstrapId=event.bootstrapId;
-  state.homeBlocked=!!event.homeBlocked;
-  state.homeLoading=Object.fromEntries(homeSections.map(name=>[name,retain&&state.homeLoading[name]?.snapshot?state.homeLoading[name]:{
-   status:event.partial?'loading':'ready',snapshot:!event.partial&&name==='reports'&&Object.hasOwn(event,'reports')
-  }]));
- }else if(event.bootstrapId&&event.bootstrapId!==state.bootstrapId||state.homeBlocked&&homePayload[event.type])return false;
- if(event.type==='libraryState'){
-  const renders={users:window.renderUserHome,posts:window.renderPostHome,reports:window.renderContextReports};
-  for(const name of event.section==='all'?homeSections:[event.section]){
-   if(!homeSections.includes(name))continue;
-   const previous=state.homeLoading[name],snapshot=!!previous?.snapshot;
-   if(snapshot&&event.status==='loading'||previous?.snapshotFailed&&event.status==='ready')continue;
-   const next={status:event.status,message:event.message||'',snapshot,...(event.snapshotFailed?{snapshotFailed:true}:{})};
-   if(previous?.status===next.status&&(previous?.message||'')===next.message&&previous?.snapshotFailed===next.snapshotFailed)continue;
-   state.homeLoading[name]=next;renders[name]?.();
-  }
- }
- else if(homePayload[event.type])state.homeLoading[homePayload[event.type]]={status:'ready',snapshot:true};
- return true;
-}
 const workspaceChannel = ReaderWorkspaceChannel.create({current: () => state.workspace, assign: value => { state.workspace = value; }});
 const taskEvents = ReaderTaskEvents.create(), taskActivity = ReaderTaskActivity.create(), entityStatus = ReaderEntityStatus.create();
 const serviceScope = ReaderWorkspaceChannel.createScope(() => state.workspace);
@@ -105,91 +22,62 @@ function markCommentDirection(element, kind) {
     return element;
 }
 function button(text, cls, handler) { const el = node('button', cls, text); el.type = 'button'; el.addEventListener('click', handler); return el; }
-function serviceLoginBusy() { return !!state.serviceLogin && serviceScope.owns(state.serviceLogin) && taskEvents.snapshot().requestId === state.serviceLogin.requestId; }
-function contentTaskBusy() { return (state.busy || state.starting) && !serviceLoginBusy(); }
-function serviceAccountText(account) { return (account.username ? '账户：' + account.username + '\n' : '') + '余额：' + (account.balance == null ? '暂不可用' : numeric(account.balance) + ' credits') + (account.service ? '\n服务状态：' + ({ formal_active: '正式服务', trial_active: '体验服务' }[account.service] || account.service) : ''); }
-function renderServiceLogin() {
-    const login = state.serviceLogin, visible = !!login && (serviceScope.owns(login) || login.localOnly && !state.serviceWorkspaceAccepted), box = $('service-login-status');
-    box.hidden = !visible;
-    if (!visible) return;
-    $('service-login-heading').textContent = login.heading;
-    window.ReaderNotices?.reset($('service-login-message'));
-    $('service-login-message').hidden = false;
-    $('service-login-message').textContent = login.message;
-    if (login.failed) window.ReaderNotices?.decorate($('service-login-message'), {scope: login.workspace + '|service-login', key: login.requestId || 'engine'});
-    $('service-login-cancel').hidden = !serviceLoginBusy();
-    $('service-login-cancel').disabled = !!login.cancelling;
-}
-function serviceLoginEvent(event, ownership) {
-    const login = state.serviceLogin;
-    if (!login || !serviceScope.owns(login)) return false;
-    const engineStopped = ['engineStopped', 'engineTransportError'].includes(event.type) && ownership.task?.requestId === login.requestId;
-    if (!engineStopped && (ownership.route !== 'task' || ownership.task?.requestId !== login.requestId)) return false;
-    if (engineStopped) {
-        state.engineAvailable = false;
-        login.failed = true;
-        login.heading = '登录已中断'; login.message = '运行引擎已停止，请重新打开应用后登录；未读取微博内容。';
-    } else if (event.type === 'started' || event.type === 'preparing') {
-        login.heading = event.type === 'started' ? '等待浏览器授权' : '准备登录';
-        login.message = event.type === 'started' ? '请在服务提供方的浏览器页面完成登录授权，不会读取微博内容。' : '正在准备服务账户登录，不会读取微博内容。';
-    } else if (event.type === 'stopping') {
-        login.cancelling = true; login.heading = '正在取消登录'; login.message = '正在等待登录进程退出，不会开始读取微博内容。';
-    } else if (event.type === 'error') {
-        login.failed = true;
-        login.heading = '登录未完成'; login.message = event.message || '登录未完成，请稍后重试。';
-    } else if (event.type === 'finished') {
-        login.cancelling = false;
-        login.failed = !event.cancelled && event.code !== 0;
-        login.heading = event.cancelled ? '已取消登录' : event.code === 0 ? '授权已完成' : '登录未完成';
-        login.message = event.cancelled ? '本次登录已取消，未读取微博内容。' : event.code === 0 ? '浏览器授权已完成，正在核对服务账户与余额。' : '服务账户登录未完成，请重试；未读取微博内容。';
-    }
-    setBusy({ accountOnly: true }); renderServiceLogin();
-    if (event.type === 'finished' && event.code === 0 && !event.cancelled) send({ action: 'account', loginRequestId: login.requestId });
-    return true;
-}
-function send(value) { value = workspaceChannel.bind(value); if (['resumeTask', 'login'].includes(value.action)) {
-    if (value.action === 'login' && !state.serviceWorkspaceAccepted) {
-        state.serviceLogin = { localOnly: true, heading: '登录尚未开始', message: '正在准备本地资料目录，请稍后再登录；未发起登录或内容请求。' };
-        view('settings'); renderServiceLogin();
-        return;
-    }
-    if (state.engineAvailable === false) {
-        if (value.action === 'login') {
-            state.serviceLogin = serviceScope.capture({ failed: true, heading: '登录未启动', message: '运行引擎已停止，请重新打开应用后登录；未读取微博内容。' });
-            view('settings'); renderServiceLogin();
-        } else toast('运行引擎已停止，请重新打开应用后重试。', true);
-        return;
-    }
-    const requestId = crypto.randomUUID();
-    if (!taskEvents.begin(requestId, null)) {
-        toast('请先等待或停止当前任务。');
-        return;
-    }
-    value = { ...value, requestId };
+const {
+  ownerUnread,
+  renderHomeLoadStatus,
+  noteStartupList,
+  syncOwnerUnread,
+  retainsHomeSnapshot,
+  homeLoadEvent
+} = ReaderHomeSurface.create({
+  state,
+  send: value => send(value),
+  $,
+  node,
+  button,
+  getHomeSnapshots: () => homeSnapshots,
+  getHistoryView: () => historyView
+});
+let account = null;
+let taskCard = null;
+function serviceLoginBusy() { return account.serviceLoginBusy(); }
+function contentTaskBusy() { return account.contentTaskBusy(); }
+function serviceAccountText(value) { return account.serviceAccountText(value); }
+function renderServiceLogin() { account.renderServiceLogin(); }
+function serviceLoginEvent(event, ownership) { return account.serviceLoginEvent(event, ownership); }
+function topBalance(value, note, unknown) { return account.topBalance(value, note, unknown); }
+function credits(data) { return account.credits(data); }
+function send(value) {
+    value = workspaceChannel.bind(value);
     if (value.action === 'login') {
-        rememberFilters();
-        state.serviceAccountRequest = null;
-        state.balanceQueryState = 'idle';
-        topBalance(state.displayBalance ?? null, state.displayBalance == null ? '' : '上次查询值', '尚未查询');
-        if (state.account) $('account-info').textContent = '上次查询结果（本次授权后尚未核实）：\n' + serviceAccountText(state.account);
-        window.ReaderSettingsStatus?.serviceAccount(null, 'authorization');
-        state.serviceLogin = serviceScope.capture({ requestId, heading: '准备登录', message: '正在准备服务账户登录，不会读取微博内容。' });
-        view('settings'); setBusy({ accountOnly: true }); renderServiceLogin();
-    } else {
-        state.progressQuery = null; setBusy(); status('准备续读', 'running'); setProgress('恢复原任务', null, '');
+        const next = account.beginLoginSend(value);
+        if (!next) return;
+        value = next;
+    } else if (value.action === 'resumeTask') {
+        if (state.engineAvailable === false) {
+            toast('运行引擎已停止，请重新打开应用后重试。', true);
+            return;
+        }
+        const requestId = crypto.randomUUID();
+        if (!taskEvents.begin(requestId, null)) {
+            toast('请先等待或停止当前任务。');
+            return;
+        }
+        value = { ...value, requestId };
+        state.progressQuery = null;
+        setBusy();
+        status('准备续读', 'running');
+        setProgress('恢复原任务', null, '');
+    } else if (value.action === 'account') {
+        const next = account.beginAccountSend(value);
+        if (!next) return;
+        value = next;
     }
-} else if (value.action === 'account') {
-    if (!state.serviceWorkspaceAccepted) return;
-    value = { ...value, requestId: crypto.randomUUID() };
-    state.serviceAccountRequest = serviceScope.capture({ requestId: value.requestId, loginRequestId: value.loginRequestId });
-    state.balanceQueryState = 'loading'; $('refresh-balance').disabled = true; $('check-account').disabled = true;
-    topBalance(state.displayBalance ?? null, state.displayBalance == null ? '' : '查询中…', '查询中…');
-} const handler = window.webkit?.messageHandlers?.weibo; if (handler)
-    handler.postMessage(value);
-else if (window.weiboBrowserHarness)
-    window.weiboBrowserHarness(value);
-else
-    toast('请在 Weibo Reader 应用中执行此操作。'); }
+    const handler = window.webkit?.messageHandlers?.weibo;
+    if (handler) handler.postMessage(value);
+    else if (window.weiboBrowserHarness) window.weiboBrowserHarness(value);
+    else toast('请在 Weibo Reader 应用中执行此操作。');
+}
 function toast(text, isError = false) { const box = $('toast'); box.textContent = text; box.hidden = false; clearTimeout(state.toastTimer); if (isError) window.ReaderNotices?.decorate(box, {key: crypto.randomUUID(), onDismiss: () => clearTimeout(state.toastTimer)}); else window.ReaderNotices?.reset(box); state.toastTimer = setTimeout(() => box.hidden = true, 4000); }
 function numeric(value) { return value == null || !Number.isFinite(Number(value)) ? '—' : Number(value).toLocaleString('en-US', { maximumFractionDigits: 3 }); }
 function view(name) { if(state.view!==name)window.ReaderEntityActions?.closeResume(); state.view = name; all('.view').forEach(el => el.hidden = el.id !== 'view-' + name); all('.nav-item').forEach(el => el.classList.toggle('active', el.dataset.view === (name === 'follow' ? 'subscriptions' : ['create', 'history'].includes(name) ? (state.selection?.kind === 'post' ? 'posts-home' : 'home') : name))); window.scrollTo({ top: 0 }); renderTaskActivity(); window.ReaderInsights?.enter(); window.postCenterOnView?.(name); }
@@ -333,140 +221,12 @@ function taskMatchesForm(input) { if (!input)
 function progressActive() { return !!(contentTaskBusy() || state.localGenerating); }
 function syncProgressMotion() { const active = progressActive(); $('progress-track').classList.toggle('is-running', active); if (!active && !$('progress-track').classList.contains('determinate'))
     $('progress-track').hidden = true; }
-function renderTaskParameters(q) {
-    const report = q.task === 'report', quick = q.syncOperation === 'quick' || q.policy === 'update';
-    $('task-panel-heading').textContent = '本次任务';
-    markCommentDirection($('task-title'), q.mode).textContent = (report ? '生成报告 · ' : quick ? '快速检查更新 · ' : '获取数据 · ') + (modes[q.mode] || q.mode);
-    $('summary-policy').textContent = report ? '本地查看 · 0 credits' : quick ? '快速检查更新' : q.from || q.to ? '常规获取 · 日期范围' : '常规获取';
-    $('summary-limit-label').textContent = report ? '查看范围' : quick ? '新增返回上限' : '覆盖目标';
-    $('summary-limit').textContent = ReaderUX.scope(q).summary;
-}
-function renderLiveAdded(count) {
-    if (!state.progressQuery?.syncOnly || state.progressQuery.preview || !Number.isSafeInteger(count) || count < 0)
-        return;
-    $('task-card').classList.add('is-acquiring');
-    $('summary-limit-label').textContent = '本次新增';
-    const value = numeric(count) + ' 条';
-    if ($('summary-limit').textContent !== value) $('summary-limit').textContent = value;
-}
-function resetTaskCard(q = query()) {
-    if ($('task-progress-dialog')?.open)
-        $('task-progress-dialog').close();
-    resetProgressPresentation();
-    $('task-card').classList.remove('is-acquiring');
-    $('task-panel-heading').textContent = '本次任务';
-    $('continue-update').removeAttribute('data-task-id');
-    state.cardFormKey = ReaderDataQuery.key(q);
-    state.summary = null;
-    state.credits = null;
-    state.continuation = false;
-    state.returnLimited = false;
-    state.sources.clear();
-    state.plan = [];
-    state.gapWarnings = [];
-    state.availability.clear();
-    status('待开始');
-    $('progress-stage').textContent = '等待开始';
-    $('progress-ratio').textContent = '';
-    $('progress-track').hidden = true;
-    $('progress-track').classList.remove('is-running', 'determinate');
-    $('progress-track').removeAttribute('aria-valuenow');
-    $('progress-fill').style.width = '0%';
-    $('cost').textContent = q.task === 'report' ? '0' : '—';
-    $('cost').classList.remove('uncertain');
-    renderAvailability();
-    $('form-error').hidden = true;
-    $('progress-message').textContent = q.task === 'report' ? '点击“生成并打开报告”后，使用本地数据生成。' : '点击“获取数据”后才会开始读取。';
-    if (state.account?.balance != null) {
-        $('balance-label').textContent = '上次查询余额';
-        $('balance').textContent = numeric(state.account.balance) + ' credits';
-    }
-    else {
-        $('balance-label').textContent = '剩余余额';
-        $('balance').textContent = '尚未查询';
-    }
-    renderReturned({}, q);
-}
-function resultExplanationLabel(done) {
-    const feedback = done.feedback;
-    if (!feedback?.saved)
-        return done.state === 'interrupted' ? '获取已中断' : done.state === 'failed' ? '获取未完成' : '保存结果待确认';
-    const issue = feedback.issues.find(value => !value.missingBodyCount && !(feedback.middleGap && value.code === 'new'));
-    return issue?.text || '结果待确认';
-}
-// Completed counters belong to the captured task, never to the next form draft.
-function renderRecentTaskCard(q = query()) {
-    renderEntityInventory();
-    if (!entityStatus.allows() || contentTaskBusy() || state.localGenerating || state.finishingTask || q.task !== 'sync')
-        return false;
-    const result = taskActivity.result(q, state.workspace);
-    if (!result)
-        return false;
-    renderTaskActivity();
-    const done = result.outcome, summary = result.summary || {}, fee = result.credits || {}, captured = result.query;
-    const quick = captured.syncOperation === 'quick' || captured.policy === 'update';
-    const repair=entityStatus.snapshot().repair;if(repair&&done.feedback){done.feedback=ReaderAcquisitionFeedback.describe({...result.summary,inventoryRepair:repair},{partialFailures:done.partialFailures});}
-    const localNotice = done.feedback?.saved && done.feedback.issues.length > 0 &&
-        done.feedback.issues.every(issue => issue.code.startsWith('local:')) && !summary.incomplete;
-    const complete = !['failed','interrupted','unverified'].includes(done.state) &&
-        (done.state === 'complete' || done.feedback?.goalComplete === true || localNotice || repair?.state === 'complete' && done.feedback?.complete);
-    const coveredGap = complete && done.feedback?.middleGap;
-    const issues = done.feedback?.issues || [];
-    const showExplanation = !done.feedback?.saved || issues.some(issue => !issue.missingBodyCount && !(coveredGap && issue.code === 'new')) || !complete;
-    $('task-panel-heading').textContent = '上次获取结果';
-    markCommentDirection($('task-title'), captured.mode).textContent = modes[captured.mode] || captured.mode;
-    $('summary-policy').textContent = quick ? '快速检查更新' : captured.from || captured.to ? '常规获取 · 日期范围' : '常规获取';
-    $('summary-limit-label').textContent = '本次新增';
-    const added = summary.addedRecords;
-    $('summary-limit').textContent = done.feedback?.saved && Number.isSafeInteger(added) && added >= 0 ? numeric(added) + ' 条' : '—';
-    $('cost').textContent = fee.estimatedCredits == null ? (fee.unknownRequests ? '待核对' : '—') : numeric(fee.estimatedCredits) + (fee.unknownRequests ? ' + 待核对' : '');
-    $('cost').classList.toggle('uncertain', fee.estimatedCredits == null || fee.unknownRequests > 0);
-    if (fee.finalBalance != null) {
-        $('balance-label').textContent = '本次结束时余额';
-        $('balance').textContent = numeric(fee.finalBalance) + ' credits';
-    }
-    else if (fee.initialBalance != null && fee.estimatedCredits != null && !fee.unknownRequests) {
-        $('balance-label').textContent = '本次结束时余额估算';
-        $('balance').textContent = numeric(fee.initialBalance - fee.estimatedCredits) + ' credits';
-    }
-    else {
-        $('balance-label').textContent = '本次结束时余额';
-        $('balance').textContent = '未取得';
-    }
-    renderReturned({...summary, ...fee}, captured);
-    const expectedKinds = {'comments-both':['sent','received'],'comments-sent':['sent'],'comments-received':['received'],'post-comments':['post-comments']}[captured.mode];
-    const noNew = complete && !issues.length && quick && summary.records === 0 && summary.addedRecords === 0 && expectedKinds?.every(kind=>summary.sources?.some(source=>source.kind===kind&&(source.update?.verifiedNoNew===true&&source.update?.timeOrderVerified===true)));
-    status(noNew ? '读取完成 · 无新增' : complete ? localNotice ? '读取完成 · 有提示' : '读取完成' : done.state === 'interrupted' ? '已中断' : done.feedback?.saved ? '读取未完成 · 已保存' : '读取未完成', complete ? 'success' : 'warning');
-    setProgress(noNew ? '检查完成，未发现新增' : complete ? '获取已完成' : '', complete ? 1 : null, '');
-    $('task-card').classList.add('is-result');
-    $('task-card').classList.remove('is-acquiring');
-    if (coveredGap && result.taskId)
-        $('result-gap-notice').dataset.taskId = result.taskId;
-    renderResultGapNotice();
-    const missing = $('result-missing-bodies');
-    missing.hidden = !result.missingBodies.count;
-    missing.textContent = missing.hidden ? '' : (result.missingBodies.atLeast ? '至少 ' : '') + numeric(result.missingBodies.count) + ' 个已知 ID 缺失正文';
-    if (!complete)
-        $('progress-track').hidden = true;
-    $('progress-message').textContent = noNew ? '已核对所选方向，未发现新增。' : done.feedback?.detail || '保存结果待确认，请查看运行详情。';
-    $('progress-message').hidden = false;
-    if (showExplanation)
-        $('progress-details').dataset.resultLabel = resultExplanationLabel(done);
-    else if (issues.length)
-        $('progress-message').hidden = true;
-    if (hasSeparateContinuationNotice(captured,result)) {
-        window.ReaderNotices?.reset($('progress-message'));
-        $('progress-message').hidden = true;
-    } else if (showExplanation) {
-        window.ReaderNotices?.decorate($('progress-message'), {
-            scope: ReaderTaskActivity.key(captured, state.workspace), key: result.taskId,
-            ...window.taskPresentationOptions?.(captured,result.taskId,result), externalDismiss:true
-        });
-    }
-    return true;
-}
-function syncTaskCard(q) { const key = ReaderDataQuery.key(q); if (!state.finishingTask && !progressActive() && state.cardFormKey !== key)
-    resetTaskCard(q); syncProgressMotion(); }
+function renderTaskParameters(q) { return taskCard.renderTaskParameters(q); }
+function renderLiveAdded(count) { return taskCard.renderLiveAdded(count); }
+function resetTaskCard(q) { return taskCard.resetTaskCard(q); }
+function resultExplanationLabel(done) { return taskCard.resultExplanationLabel(done); }
+function renderRecentTaskCard(q) { return taskCard.renderRecentTaskCard(q); }
+function syncTaskCard(q) { return taskCard.syncTaskCard(q); }
 function status(text, cls = '') { $('status-pill').textContent = text; $('status-pill').className = 'status-pill' + (cls ? ' ' + cls : ''); }
 function setBusy({ accountOnly = false } = {}) { const projected = taskEvents.snapshot(); state.busy = projected.busy; state.starting = projected.starting; state.activeId = projected.activeId; const value = projected.busy, login = serviceLoginBusy(); $('active-task').hidden = !value; $('active-task').textContent = login ? '登录进行中 · 返回账户设置' : '任务进行中 · 返回查看'; all('#query-form input,#query-form select,#query-form button,[data-category]').forEach(el => el.disabled = false); $('login').disabled = value; $('balance-login').disabled = value; $('check-account').disabled = login || state.balanceQueryState === 'loading'; $('refresh-balance').disabled = login || state.balanceQueryState === 'loading'; $('choose-workspace').disabled = value; $('start').disabled = value && state.task === 'sync'; $('continue-update').disabled = value; $('start').hidden = value && state.task === 'sync' && !login; $('stop').hidden = !value || login; if (!accountOnly) { if (!value) syncProgressMotion(); updateForm(); } renderFavorites(); }
 function renderEntityInventory() {
@@ -531,53 +291,8 @@ window.syncTaskNoticePresentation=()=>{
 };
 function log(text, owner) { taskActivity.append(owner, text, state.workspace); renderTaskActivity(); if (!$('log-area').hidden)
     $('logs').scrollTop = $('logs').scrollHeight; }
-function topBalance(value, note = '', unknown = '暂不可用') { state.displayBalance = value; $('top-balance').textContent = value == null ? unknown : numeric(value) + ' credits'; $('top-balance-note').textContent = note; $('top-balance').classList.toggle('zero', value === 0); }
-function credits(data) {
-    state.credits = data;
-    $('cost').textContent = data.estimatedCredits == null ? '待核对' : numeric(data.estimatedCredits);
-    $('cost').classList.toggle('uncertain', data.estimatedCredits == null || data.unknownRequests > 0);
-    if (data.unknownRequests > 0)
-        $('cost').textContent = (data.estimatedCredits == null ? '' : numeric(data.estimatedCredits) + ' + ') + '待核对';
-    let balance = null, label = '剩余余额';
-    if (data.finalBalance != null) {
-        balance = data.finalBalance;
-        label = '服务端查询余额';
-        state.account = { ...state.account, balance, checkedAt: Date.now() };
-        topBalance(balance, '已核实');
-    }
-    else if (data.initialBalance != null && !data.unknownRequests && data.estimatedCredits != null) {
-        balance = data.initialBalance - data.estimatedCredits;
-        label = '余额估算';
-        topBalance(balance, '估算');
-    }
-    else if (!data.offline && state.jobBalance != null && !data.unknownRequests && data.estimatedCredits != null) {
-        balance = state.jobBalance - data.estimatedCredits;
-        label = '余额估算';
-        topBalance(balance, '估算');
-    }
-    else if (state.account?.balance != null) {
-        balance = state.account.balance;
-        label = '上次查询余额';
-        if (data.unknownRequests)
-            topBalance(balance, '上次查询 · 费用待核对');
-    }
-    $('balance-label').textContent = label;
-    $('balance').textContent = balance == null ? (data.offline ? '离线，未查询' : '暂不可用') : numeric(balance) + ' credits';
-    renderReturned(data);
-}
-function resetProgressPresentation() {
-    window.ReaderNotices?.reset($('progress-message'));
-    $('progress-message').hidden = false;
-    $('result-missing-bodies').hidden = true;
-    $('result-gap-notice').hidden = true;
-    delete $('result-gap-notice').dataset.taskId;
-    $('task-card').classList.remove('is-result');
-    delete $('progress-details').dataset.resultLabel;
-}
-function setProgress(label, value, text) { resetProgressPresentation(); $('progress-stage').textContent = label; $('progress-ratio').textContent = text || ''; const finite = Number.isFinite(value), active = progressActive(); $('progress-track').hidden = !active && !finite; $('progress-track').classList.toggle('determinate', finite); $('progress-track').classList.toggle('is-running', active); $('progress-fill').style.width = finite ? Math.max(0, Math.min(100, value * 100)) + '%' : '32%'; if (finite)
-    $('progress-track').setAttribute('aria-valuenow', String(Math.max(0, Math.min(100, Math.round(value * 100)))));
-else
-    $('progress-track').removeAttribute('aria-valuenow'); }
+function resetProgressPresentation() { return taskCard.resetProgressPresentation(); }
+function setProgress(label, value, text) { return taskCard.setProgress(label, value, text); }
 // Keep local report costs separate from CLI return counts.
 function renderReturned(data = {}, q = state.runningQuery || query()) {
     const local = q?.task === 'report' || q?.policy === 'database';
@@ -649,6 +364,18 @@ function taskAvailabilityDetails() {
     return root;
 }
 function dateText(time) { return ReaderDates.displayMinute(time); }
+account = ReaderAccountSurface.create({
+  state, $, serviceScope, taskEvents, send, view, setBusy, rememberFilters, toast, numeric, renderReturned
+});
+taskCard = ReaderTaskCard.create({
+  state, $, modes, numeric, markCommentDirection, query, contentTaskBusy,
+  entityStatus, taskActivity, status, renderAvailability, renderReturned,
+  renderEntityInventory, renderTaskActivity, hasSeparateContinuationNotice,
+  renderResultGapNotice, dateText,
+  ReaderDataQuery: window.ReaderDataQuery, ReaderUX: window.ReaderUX,
+  ReaderAcquisitionFeedback: window.ReaderAcquisitionFeedback,
+  ReaderTaskActivity: window.ReaderTaskActivity
+});
 function reportRow(report, primary = false) { const row = node('div', 'version-row' + (primary ? ' primary-version' : '')), info = node('div', 'version-info'); info.append(node('strong', '', report.merged ? '互动总报告' : (report.category === 'post-comments' ? '评论 · ' : report.category === 'posts' ? '微博 · ' : '互动 · ') + (report.count == null ? '记录数量未识别' : numeric(report.count) + ' 条') + (report.partial ? ' · 未完成' : '')), node('span', '', dateText(report.modified) + ' · ' + (report.size > 1048576 ? (report.size / 1048576).toFixed(1) + ' MB' : Math.ceil(report.size / 1024) + ' KB'))); if (report.from || report.before)
     info.append(node('span', '', report.scope || report.from + ' — ' + report.to)); info.append(timeSpan(report.modified)); info.title = report.name; row.append(info, button('打开报告 ↗', primary ? 'button primary' : 'button secondary', () => readReport(report.id)), button('打开文件夹', 'button secondary', () => openReport(report.id, 'folder'))); return row; }
 function renderLibrary() { window.renderContextReports?.(); }

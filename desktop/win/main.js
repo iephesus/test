@@ -6,16 +6,27 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { managementExternalURL } = require('./external-links');
 const { appVersion } = require('../../scripts/app-version');
+const { FeedbackDiagnostics } = require('./feedback-diagnostics');
+const { createUiEventQueue } = require('./ui-event-queue');
+const { resolveAppRoots } = require('./paths');
 
 // Prefer Chinese UI chrome and skip unused Chromium startup work before ready.
 app.commandLine.appendSwitch('lang', 'zh-CN');
 app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion,SpareRendererForSitePerProcess');
 
-const ROOT = app.isPackaged ? app.getAppPath() : path.resolve(__dirname, '..', '..');
-const pkg = require(path.join(ROOT, 'package.json'));
+const projectRoot = app.isPackaged ? app.getAppPath() : path.resolve(__dirname, '..', '..');
+const { appRoot: APP_ROOT, engineRoot: ENGINE_ROOT } = resolveAppRoots({
+  isPackaged: app.isPackaged,
+  appPath: projectRoot,
+  resourcesPath: process.resourcesPath
+});
+const ROOT = APP_ROOT;
+const pkg = require(path.join(APP_ROOT, 'package.json'));
 const versionInfo = appVersion(pkg);
 const SHELL_STATE = path.join(app.getPath('userData'), 'shell-state.json');
 const DEFAULT_WORKSPACE = path.join(app.getPath('appData'), 'selnokk.weibo.reader');
+const RUNTIME_LOGS = path.join(DEFAULT_WORKSPACE, 'private', 'runtime-logs');
+const APP_ICON = path.join(APP_ROOT, 'build', 'icon.ico');
 
 const {
   LOCAL_ACTIONS,
@@ -23,6 +34,10 @@ const {
   FORWARD_ACTIONS,
   TRANSPORT_SAFE
 } = require('./shell-actions');
+
+const feedback = new FeedbackDiagnostics({ version: versionInfo.version, build: versionInfo.build });
+let feedbackPreview = null;
+let feedbackRequest = '';
 
 let mainWindow = null;
 let engine = null;
@@ -33,8 +48,6 @@ let acceptedWorkspace = null;
 let acceptedLibraryAcknowledgment = null;
 let uiReady = false;
 let documentEpoch = 1;
-let queued = [];
-let queuedBytes = 0;
 let transportFailed = false;
 let quitting = false;
 let busy = false;
@@ -47,9 +60,7 @@ let exchangeWriter = null;
 let workspaceSelection = null;
 let startupBootstrapSent = false;
 let startupWriter = null;
-const queuedEventLimit = 32 * 1024;
-const queuedByteLimit = 128 * 1024;
-const queuedCountLimit = 32;
+const uiEventQueue = createUiEventQueue();
 
 function readShellState() {
   try {
@@ -74,7 +85,7 @@ function createWindow() {
   fs.mkdirSync(workspace, { recursive: true });
 
   const appInfo = JSON.stringify({ version: versionInfo.version });
-  mainWindow = new BrowserWindow({
+  const windowOptions = {
     width: 1240,
     height: 850,
     minWidth: 980,
@@ -92,18 +103,20 @@ function createWindow() {
       backgroundThrottling: false,
       additionalArguments: [`--weibo-app-info=${appInfo}`]
     }
-  });
+  };
+  if (fs.existsSync(APP_ICON)) windowOptions.icon = APP_ICON;
+  mainWindow = new BrowserWindow(windowOptions);
 
   mainWindow.once('ready-to-show', () => mainWindow.show());
   mainWindow.on('closed', () => { mainWindow = null; });
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   mainWindow.webContents.on('will-navigate', (event, url) => {
-    const allowed = pathToFileURL(path.join(ROOT, 'desktop', 'ui', 'index.html')).href;
+    const allowed = pathToFileURL(path.join(ENGINE_ROOT, 'desktop', 'ui', 'index.html')).href;
     if (url.split(/[?#]/)[0] !== allowed.split(/[?#]/)[0]) event.preventDefault();
   });
 
-  // Paint the shell first; spawning the Node engine competes for disk/CPU.
-  mainWindow.loadFile(path.join(ROOT, 'desktop', 'ui', 'index.html'));
+  // UI is asarUnpack'd with lib/ so relative ../../lib/*.js resolves on disk.
+  mainWindow.loadFile(path.join(ENGINE_ROOT, 'desktop', 'ui', 'index.html'));
   setImmediate(() => startEngine());
 }
 
@@ -114,7 +127,7 @@ function pathToFileURL(filePath) {
 
 function startEngine() {
   if (engine && !engine.killed) return;
-  const bridge = path.join(ROOT, 'desktop', 'bridge.js');
+  const bridge = path.join(ENGINE_ROOT, 'desktop', 'bridge.js');
   const startupWorkspace = workspace;
   const env = {
     ...process.env,
@@ -124,7 +137,7 @@ function startEngine() {
     PATH: path.dirname(process.execPath) + path.delimiter + (process.env.PATH || '')
   };
   const child = spawn(process.execPath, [bridge, '--workspace', startupWorkspace, '--wait-for-ready', '--native-startup'], {
-    cwd: ROOT,
+    cwd: ENGINE_ROOT,
     env,
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true
@@ -149,7 +162,11 @@ function startEngine() {
       }
       return;
     }
+    feedback.observe({ type: 'engineStopped' });
     deliver({ type: 'engineStopped', message: '运行引擎已结束，请重新打开应用。' });
+  });
+  child.on('error', () => {
+    feedback.observe({ type: 'engineStartFailed' });
   });
 
   if (!startupBootstrapSent) {
@@ -206,6 +223,7 @@ function handleEngineEvent(event) {
     if (event.credits?.type === 'credits' && event.credits.workspace === workspace) deliver(event.credits);
     return;
   }
+  feedback.observe(event);
   if (type === 'started') {
     busy = true;
     automaticCollection = event.automatic === true;
@@ -276,7 +294,10 @@ function completeBrowserOpen(event, error) {
     workspace: event.workspace || workspace
   };
   if (event.requestId) reply.requestId = event.requestId;
-  if (error) reply.message = error;
+  if (error) {
+    reply.message = error;
+    feedback.observe({ type: 'browserOpenFailed' });
+  }
   deliver(reply);
   if (event.handoffTicket) {
     localWriters.add(event.handoffTicket);
@@ -294,7 +315,7 @@ function completeBrowserOpen(event, error) {
 
 function deliver(event) {
   if (!uiReady) {
-    queueBeforeFrontend(event);
+    uiEventQueue.enqueue(event);
     return;
   }
   if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -302,45 +323,10 @@ function deliver(event) {
   mainWindow.webContents.executeJavaScript(`window.weiboReceive(${json});`).catch(() => {});
 }
 
-function queueBeforeFrontend(original) {
-  const type = original.type || '';
-  let event = original;
-  if (type === 'library') {
-    event = { type: 'library', partial: true, accounts: [], favorites: [], postFavorites: [], reportKeep: 1 };
-    for (const key of ['workspace', 'version', 'bootstrapId']) {
-      if (typeof original[key] === 'string') event[key] = original[key];
-    }
-    if (original.homeBlocked === true) event.homeBlocked = true;
-  } else {
-    const controls = new Set([
-      'engineStopped', 'engineTransportError', 'quitting', 'refreshWarning', 'error', 'taskFutureError',
-      'browserOpened', 'browserOpenFailed', 'feedbackPreview', 'feedbackResult', 'localError',
-      'accountError', 'recoveryError'
-    ]);
-    if (!controls.has(type)) return;
-  }
-  let data;
-  try { data = Buffer.from(JSON.stringify(event)); } catch { return; }
-  if (data.length > queuedEventLimit) return;
-  const identity = key => ['type', 'workspace', 'requestId', 'taskId', 'scope'].map(k => key[k] || '').join('|');
-  const id = identity(event);
-  queued = queued.filter(item => identity(item) !== id);
-  queuedBytes = queued.reduce((n, item) => n + Buffer.byteLength(JSON.stringify(item)), 0);
-  while (queued.length && (queued.length >= queuedCountLimit || queuedBytes + data.length > queuedByteLimit)) {
-    const removed = queued.shift();
-    queuedBytes -= Buffer.byteLength(JSON.stringify(removed));
-  }
-  queued.push(event);
-  queuedBytes += data.length;
-}
-
 function frontendDidBecomeReady() {
   if (uiReady) return false;
   uiReady = true;
-  const events = queued.filter(event => !event.workspace || event.workspace === workspace);
-  queued = [];
-  queuedBytes = 0;
-  for (const event of events) deliver(event);
+  for (const event of uiEventQueue.flush(workspace)) deliver(event);
   send({ action: 'frontendAttach', workspace, documentEpoch });
   return true;
 }
@@ -348,11 +334,13 @@ function frontendDidBecomeReady() {
 function failTransport(message) {
   if (transportFailed) return;
   transportFailed = true;
+  feedback.observe({ type: 'transportFailed' });
   deliver({ type: 'engineTransportError', message });
   send({ action: 'shutdown' });
 }
 
 function send(original) {
+  feedback.capture(original);
   if (transportFailed && !['stop', 'shutdown'].includes(original.action)) return;
   if (!engineInput || engineInput.destroyed) {
     if (String(original.action || '').startsWith('exchange')) failTransport('无法连接运行引擎，请重新打开应用。');
@@ -447,6 +435,7 @@ async function handleUiMessage(body) {
       frontendDidBecomeReady();
       break;
     case 'startupListReady':
+      feedback.observe({ type: 'startupListReady' });
       break;
     case 'chooseWorkspace':
       await chooseWorkspace(body);
@@ -486,35 +475,59 @@ async function handleFeedback(body) {
   const action = body.action;
   if (!['feedbackPreview', 'feedbackCopy', 'feedbackExport'].includes(action)) return false;
   const requestId = body.requestId || '';
-  if (action === 'feedbackPreview') {
+  if (action === 'feedbackPreview' || action === 'feedbackExport') {
+    feedbackRequest = requestId;
+    const snap = feedback.makeSnapshot(versionInfo.version, versionInfo.build);
+    if (feedbackRequest !== requestId) return true;
+    if (action === 'feedbackExport') {
+      await saveRuntimeLog(snap.bytes, requestId);
+      return true;
+    }
+    const snapshotId = cryptoRandom();
+    feedbackPreview = { id: snapshotId, bytes: snap.bytes, text: snap.text };
+    const preview = snap.bytes.subarray(0, PREVIEW_LIMIT).toString('utf8');
     deliver({
-      type: 'feedbackPreview', requestId, snapshotId: cryptoRandom(),
-      text: 'Windows 壳反馈快照尚未实现完整原生诊断。版本 ' + versionInfo.version,
-      preview: 'Windows 壳反馈快照尚未实现完整原生诊断。版本 ' + versionInfo.version,
-      json: '{}', truncated: false, summary: { platform: 'win32', version: versionInfo.version }
+      type: 'feedbackPreview',
+      requestId,
+      snapshotId,
+      text: snap.text,
+      preview,
+      json: preview,
+      truncated: snap.bytes.length > PREVIEW_LIMIT,
+      summary: snap.summary
     });
     return true;
   }
-  if (action === 'feedbackCopy') {
-    clipboard.writeText(String(body.text || 'Weibo Reader ' + versionInfo.version));
-    deliver({ type: 'feedbackResult', requestId, status: 'copied' });
+  if (!feedbackPreview || feedbackPreview.id !== body.snapshotId) {
+    deliver({ type: 'feedbackResult', requestId, status: 'preview-required' });
     return true;
   }
+  try {
+    clipboard.writeText(feedbackPreview.text);
+    deliver({ type: 'feedbackResult', requestId, status: 'copied' });
+  } catch {
+    deliver({ type: 'feedbackResult', requestId, status: 'failed' });
+  }
+  return true;
+}
+
+const PREVIEW_LIMIT = 24 * 1024;
+
+async function saveRuntimeLog(bytes, requestId) {
   const result = await dialog.showSaveDialog(mainWindow, {
     defaultPath: 'Weibo-Reader-Runtime.log',
     filters: [{ name: 'Log', extensions: ['log', 'txt'] }]
   });
   if (result.canceled || !result.filePath) {
     deliver({ type: 'feedbackResult', requestId, status: 'cancelled' });
-    return true;
+    return;
   }
   try {
-    fs.writeFileSync(result.filePath, 'Weibo Reader ' + versionInfo.version + '\nplatform=win32\n');
+    fs.writeFileSync(result.filePath, bytes);
     deliver({ type: 'feedbackResult', requestId, status: 'saved' });
   } catch {
     deliver({ type: 'feedbackResult', requestId, status: 'failed' });
   }
-  return true;
 }
 
 async function chooseWorkspace(body) {
@@ -583,6 +596,7 @@ async function chooseDataImport(body) {
 function requestQuit() {
   if (quitting) return;
   quitting = true;
+  feedback.observe({ type: 'quitRequested' });
   send({ action: 'shutdown' });
   const timer = setInterval(() => {
     if (!engine || engine.killed) {
@@ -610,6 +624,8 @@ function requestQuit() {
 
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
+  feedback.enablePersistence(RUNTIME_LOGS);
+  feedback.observe({ type: 'appStarted' });
   ipcMain.on('weibo-ui', (_event, body) => {
     Promise.resolve(handleUiMessage(body)).catch(error => {
       deliver({ type: 'error', message: error.message || String(error) });
@@ -620,6 +636,10 @@ app.whenReady().then(() => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
     else if (mainWindow) mainWindow.show();
   });
+});
+
+app.on('will-quit', () => {
+  feedback.finishSession();
 });
 
 app.on('window-all-closed', () => {

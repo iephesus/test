@@ -10,6 +10,7 @@
     "desktop:open": "open \"dist/Weibo Reader.app\"",
     "desktop:package": "node scripts/package-desktop.js",
     "desktop:win": "electron .",
+    "desktop:win:icon": "node scripts/make-win-icon.cjs",
     "desktop:win:package": "node scripts/package-win.cjs",
     "postinstall": "node scripts/fix-weibo-cli-open-browser.cjs"
   },
@@ -29,7 +30,8 @@
     "appId": "selnokk.weibo.reader",
     "productName": "Weibo Reader",
     "directories": {
-      "output": "dist-win"
+      "output": "dist-win",
+      "buildResources": "build"
     },
     "compression": "maximum",
     "npmRebuild": false,
@@ -70,11 +72,22 @@
       "!node_modules/electron-builder/**",
       "!node_modules/app-builder-*/**"
     ],
-    "asar": false,
+    "asar": true,
+    "asarUnpack": [
+      "desktop/*.js",
+      "desktop/ui/**/*",
+      "desktop/!(ui|win)/**/*",
+      "lib/**/*",
+      "weibo_cli.js",
+      "node_modules/**/*",
+      "package.json",
+      "scripts/app-version.js"
+    ],
     "extraMetadata": {
       "main": "desktop/win/main.js"
     },
     "win": {
+      "icon": "build/icon.ico",
       "signAndEditExecutable": false,
       "target": [
         {

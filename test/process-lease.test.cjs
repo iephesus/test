@@ -4,7 +4,39 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { spawn } = require('node:child_process');
 const lease = require('../lib/process-lease');
+
+test('processBirth returns a stable marker for the current process', {
+  skip: ['win32', 'linux', 'darwin'].includes(process.platform) ? false : 'unsupported platform'
+}, () => {
+  const birth = lease.processBirth(process.pid);
+  assert.ok(birth);
+  assert.equal(typeof birth, 'string');
+  if (process.platform === 'win32') assert.ok(Number.isFinite(Date.parse(birth)));
+});
+
+test('running rejects live PID when birth token does not match', async () => {
+  const child = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], {
+    stdio: 'ignore',
+    windowsHide: true
+  });
+  try {
+    await new Promise((resolve, reject) => {
+      child.once('spawn', resolve);
+      child.once('error', reject);
+    });
+    const birth = lease.processBirth(child.pid);
+    if (!birth) {
+      assert.equal(lease.running({ pid: child.pid, birth: 'x', legacy: false }, () => null), true);
+      return;
+    }
+    assert.equal(lease.running({ pid: child.pid, birth, legacy: false }), true);
+    assert.equal(lease.running({ pid: child.pid, birth: birth + '-mismatch', legacy: false }), false);
+  } finally {
+    child.kill();
+  }
+});
 
 test('renameConflict treats Windows EPERM as destination collision', () => {
   assert.equal(lease.renameConflict({ code: 'EEXIST' }), true);

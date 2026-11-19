@@ -10,48 +10,26 @@ const library = require('./library');
 const { listAccounts, listReports, containedReport } = library;
 const {readLines:lineStream}=require('./line-channel');
 function runBridge(configuration = {}) {
-    let workspace = path.resolve(configuration.workspace || process.cwd()), active = null, accountTask = null, accountState = null, preparing = null, terminating = false, follow = null, manualQueue = null, profiles = null, deletions = null, bulk = null, priceReference = null, profileBatch = false;
+    let workspace = path.resolve(configuration.workspace || process.cwd()), active = null, accountTask = null, accountState = null, preparing = null, terminating = false, follow = null, profiles = null, deletions = null, bulk = null, priceReference = null, profileBatch = false;
     let booting=false, preparingWorkspace=false, workspaceReady=false, gapChoiceIssues=[], bootstrapGeneration=0, stagedHome=null;
     let nativeLibraryExpected=null, nativeLibraryAccepted=null, frontendEpoch=0;
     const nativeWorkspaceReady=()=>!configuration.requireNativeWorkspaceAck||nativeLibraryExpected?.workspace===workspace&&nativeLibraryAccepted?.workspace===workspace&&nativeLibraryAccepted.bootstrapId===nativeLibraryExpected.bootstrapId;
-    let foregroundDispatching=false;const queuedDispatch=Symbol('queued foreground'),queuedRequests=new Map();
-    const pendingForeground=()=>!!manualQueue&&!foregroundDispatching;
-    function needsForeground(message){return ['workspace','userDeletePlan','userDeleteConfirm','manageDeletePlan','manageDeleteConfirm','profilesRefresh','userProfileRetry','postAuthorAvatar','userAdd','run','resumeTask','cleanup','merge','login','recoveryRetry','taskGapIgnore','taskFuturePreview','taskFutureChoose','exchangeExport','exchangeInspect','exchangeCommit'].includes(message.action)||message.action==='manageBatch'&&message.operation==='subscribe';}
-    function queueForeground(message){
-        if(terminating)throw Error('正在保存并退出，未安排新的操作');
-        const captured=structuredClone({...message,workspace:typeof message.workspace==='string'?message.workspace:workspace}),requestId=captured.requestId||crypto.randomUUID();captured.requestId=requestId;
-        if(typeof requestId!=='string'||requestId.length>256)throw Error('排队请求身份无效');
-        const signature=crypto.createHash('sha256').update(JSON.stringify(captured)).digest('hex'),previous=queuedRequests.get(requestId);
-        if(previous){if(previous.signature!==signature)throw Error('排队请求身份与原操作不一致');return !previous.completed;}
-        if(captured.action==='resumeTask')captured.query=require('./user-workspace').resume(workspace,captured.id,{budget:captured.returnBudget});
-        const bytes=Buffer.byteLength(JSON.stringify(captured));
-        if((manualQueue?.length||0)>=16||(manualQueue||[]).reduce((n,q)=>n+q.bytes,0)+bytes>4*1024*1024)throw Error('前台操作队列已满，请先完成或取消已有操作');
-        const item={id:crypto.randomUUID(),requestId,message:captured,signature,bytes};
-        (manualQueue??=[]).push(item);queuedRequests.set(requestId,item);
-        const job=active||preparing;
-        if(job?.automatic){
-            if(preparing===job&&!active){job.cancelled=true;preparing=null;getFollow().finish(job.id,{code:0,cancelled:true,yielded:true,reason:'前台操作优先，尚未发起请求'});}
-            else getFollow().interrupt('前台操作优先，保存当前响应后让出',{code:'AUTO_YIELD'});
-        }
-        scopedPublish(captured.workspace)(['run','resumeTask'].includes(captured.action)?'manualQueued':'foregroundQueued',{id:item.id,requestId,action:captured.action,...(captured.query?{query:captured.query}:{}),message:'正在等待后台响应保存，完成后自动执行。'});
-        drainForeground();return true;
-    }
-    function drainForeground(){
-        if(!manualQueue||foregroundDispatching||active||preparing||profileBatch||exchangeActive||terminating)return;
-        const item=manualQueue.shift();if(!manualQueue.length)manualQueue=null;foregroundDispatching=true;
-        Promise.resolve(handle(item.message,queuedDispatch)).finally(()=>{foregroundDispatching=false;queuedRequests.set(item.requestId,{signature:item.signature,completed:true});scopedPublish(item.message.workspace)('foregroundDequeued',{id:item.id,requestId:item.requestId,action:item.message.action});while(queuedRequests.size>512){const old=[...queuedRequests].find(([,value])=>value.completed);if(!old)break;queuedRequests.delete(old[0]);}drainForeground();});
-    }
-    function cancelForeground(requestId,all=false){
-        if(!manualQueue)return false;
-        const selected=all?manualQueue:requestId?manualQueue.filter(item=>item.requestId===requestId):manualQueue.slice(0,1);if(!selected.length)return false;
-        manualQueue=manualQueue.filter(item=>!selected.includes(item));if(!manualQueue.length)manualQueue=null;
-        for(const item of selected){queuedRequests.set(item.requestId,{signature:item.signature,completed:true});scopedPublish(item.message.workspace)('foregroundDequeued',{id:item.id,requestId:item.requestId,action:item.message.action,cancelled:true});scopedPublish(item.message.workspace)('localWriteState',{requestId:item.requestId,busy:false});if(['run','resumeTask'].includes(item.message.action)){recordPreparation({id:item.id,requestId:item.requestId,query:item.message.query,startedAt:new Date().toISOString()},'前台排队期间取消，尚未取数');scopedPublish(item.message.workspace)('finished',{id:item.id,taskId:item.id,requestId:item.requestId,kind:'collect',code:null,cancelled:true,preparation:true,reports:[]});}}
-        drainForeground();return true;
-    }
+    let foreground = null;
+    const pendingForeground = () => foreground?.pendingForeground() || false;
+    const { needsForeground } = require('./foreground-queue');
+    const queueForeground = message => foreground.queueForeground(message);
+    const drainForeground = () => foreground?.drainForeground();
+    const cancelForeground = (requestId, all) => foreground?.cancelForeground(requestId, all) || false;
+    const queuedRequests = {
+        get: key => foreground.queuedRequests.get(key),
+        has: key => foreground.queuedRequests.has(key),
+        set: (key, value) => foreground.queuedRequests.set(key, value)
+    };
+    let queuedDispatch = null;
     let inventoryRepairs=null,inventoryBase=null,inventoryRecovered=false;const getInventoryRepairs=()=>{if(inventoryBase!==workspace){inventoryRepairs?.close();inventoryBase=workspace;inventoryRepairs=null;}return inventoryRepairs??=require('./inventory-repair').create(workspace,{publish:scopedPublish(workspace)});};
     let insights=null,insightsBase=null;const getInsights=()=>{if(insightsBase!==workspace){insights?.close();insightsBase=workspace;insights=null;}return insights??=require('./local-insights').create(workspace);};
     let reportAccess = null, finalizer = null, recoveredFinalization = false, exchangePromise = null, exchangeActive = false, exchangeController = null;
-    const localActions = require('./local-actions').createLocalActions({ workspace: () => workspace, publish: base => scopedPublish(base), validateSubject, targetUid, inventoryRepairs: getInventoryRepairs, reportAccess: () => getReportAccess(), pendingReports:base=>reportAccesses.get(base)?.pendingReports()||[], terminating: () => terminating, isBusy:()=>!!active||!!preparing||!!manualQueue||!!exchangeActive||!!profileBatch, library, listReports, clean });
+    const localActions = require('./local-actions').createLocalActions({ workspace: () => workspace, publish: base => scopedPublish(base), validateSubject, targetUid, inventoryRepairs: getInventoryRepairs, reportAccess: () => getReportAccess(), pendingReports:base=>reportAccesses.get(base)?.pendingReports()||[], terminating: () => terminating, isBusy:()=>!!active||!!preparing||!!foreground?.hasQueued()||!!exchangeActive||!!profileBatch, library, listReports, clean });
     const spawnChild = configuration.spawn || spawn;
     const reportAccesses=new Map();
     const getReportAccess = () => {let value=reportAccesses.get(workspace);if(!value){value=require('./report-access').createReportAccess(workspace);reportAccesses.set(workspace,value);while(reportAccesses.size>8)reportAccesses.delete(reportAccesses.keys().next().value);}return reportAccess=value;};
@@ -79,6 +57,27 @@ function runBridge(configuration = {}) {
         send({ type, workspace, ...homeAvatars.prepare(type,data,workspace) });
     };
     const scopedPublish = base => (type, data = {}) => send({ type, workspace: base, ...data });
+    foreground = require('./foreground-queue').createForegroundQueue({
+        getWorkspace: () => workspace,
+        isBusyBlockers: () => !!active || !!preparing || profileBatch || exchangeActive || terminating,
+        isTerminating: () => terminating,
+        interruptAutomatic: () => {
+            const job = active || preparing;
+            if (!job?.automatic) return;
+            if (preparing === job && !active) {
+                job.cancelled = true;
+                preparing = null;
+                getFollow().finish(job.id, { code: 0, cancelled: true, yielded: true, reason: '前台操作优先，尚未发起请求' });
+            } else {
+                getFollow().interrupt('前台操作优先，保存当前响应后让出', { code: 'AUTO_YIELD' });
+            }
+        },
+        scopedPublish,
+        dispatchQueued: (message, token) => handle(message, token),
+        recordPreparation: (job, reason) => recordPreparation(job, reason),
+        resumeQuery: captured => require('./user-workspace').resume(workspace, captured.id, { budget: captured.returnBudget })
+    });
+    queuedDispatch = foreground.queuedDispatch;
     const env = () => ({ ...process.env, WEIBO_DESKTOP_PROJECT: workspace, WEIBO_DESKTOP_CLI: cli, WEIBO_DESKTOP_EVENTS: '1', TERM: 'dumb', NO_COLOR: '1', PATH: path.dirname(process.execPath) + path.delimiter + (process.env.PATH || '/usr/bin:/bin') });
     function deleting() { return ['deletion-jobs', 'bulk-deletion-jobs'].some(name => { const dir = path.join(require('../lib/data-layout').readerRoot(workspace), name); return fs.existsSync(dir) && fs.readdirSync(dir).some(n => n.endsWith('.json')); }); }
     function removeSubscriptions(t) { const service = getFollow(), ids = t.paths?.filter(p => p.includes('/post-comments/')).map(p => require('../lib/storage').postIdFromFolder(p.split('/').at(-1))) || []; for (const e of service.snapshot().entries)
@@ -101,7 +100,7 @@ function runBridge(configuration = {}) {
     }
     function getFollow() { const ownerBase=workspace;if (configuration.followService)
         return follow = configuration.followService; if (!follow)
-        follow = require('./auto-follow').createAutoFollow(workspace, { recoverLocal:()=>{if(workspace!==ownerBase)return;if(gapChoiceIssues.length&&recoverGapChoices(ownerBase))scopedPublish(ownerBase)('recoveryState',recoveryState());if(getFinalizer().recoveryBlocked())getFinalizer().recover();},blockedDirections:e=>require('./gap-choice').blockedKinds(gapChoiceIssues,e),canDispatch:e=>workspace===ownerBase&&!getFinalizer().blockedFor({mode:e.targetKind==='post'?'post-comments':'comments-both',target:e.postId||e.uid}).length,isBusy: () => workspace!==ownerBase || !workspaceReady || !nativeWorkspaceReady() || exchangeActive || !!active || !!preparing || !!manualQueue || foregroundDispatching || terminating || profileBatch || deleting(), publish: scopedPublish(workspace), launch: round => launch('collect', [path.join(ENGINE, 'desktop/auto-runner.js'), round.id], { target: round.uid, mode: round.targetKind === 'post' ? 'post-comments' : { sent: 'comments-sent', received: 'comments-received', both: 'comments-both' }[round.mode], policy: 'update', syncOnly: true, limit: String(round.roundLimit) }, { id: round.id, automatic: true }) }); return follow; }
+        follow = require('./auto-follow').createAutoFollow(workspace, { recoverLocal:()=>{if(workspace!==ownerBase)return;if(gapChoiceIssues.length&&recoverGapChoices(ownerBase))scopedPublish(ownerBase)('recoveryState',recoveryState());if(getFinalizer().recoveryBlocked())getFinalizer().recover();},blockedDirections:e=>require('./gap-choice').blockedKinds(gapChoiceIssues,e),canDispatch:e=>workspace===ownerBase&&!getFinalizer().blockedFor({mode:e.targetKind==='post'?'post-comments':'comments-both',target:e.postId||e.uid}).length,isBusy: () => workspace!==ownerBase || !workspaceReady || !nativeWorkspaceReady() || exchangeActive || !!active || !!preparing || !!foreground?.hasQueued() || !!foreground?.isDispatching() || terminating || profileBatch || deleting(), publish: scopedPublish(workspace), launch: round => launch('collect', [path.join(ENGINE, 'desktop/auto-runner.js'), round.id], { target: round.uid, mode: round.targetKind === 'post' ? 'post-comments' : { sent: 'comments-sent', received: 'comments-received', both: 'comments-both' }[round.mode], policy: 'update', syncOnly: true, limit: String(round.roundLimit) }, { id: round.id, automatic: true }) }); return follow; }
     function prepareWorkspace(){
         if(preparingWorkspace)return;preparingWorkspace=true;
         try{
@@ -563,7 +562,7 @@ function runBridge(configuration = {}) {
                 });return;
             }
             if(message.action==='run')buildArguments(message.query||{});
-            if(dispatch!==queuedDispatch&&needsForeground(message)&&((active||preparing)?.automatic||manualQueue||foregroundDispatching||queuedRequests.has(message.requestId))){deferred=queueForeground(message);return;}
+            if(dispatch!==queuedDispatch&&needsForeground(message)&&((active||preparing)?.automatic||foreground.hasQueued()||foreground.isDispatching()||queuedRequests.has(message.requestId))){deferred=queueForeground(message);return;}
             if(['globalSearch','searchPage','searchOpen','coverageTimeline','insightsCancel','searchObjects'].includes(message.action)){
                 const base=workspace,notify=scopedPublish(base),requestId=message.requestId;
                 if(message.action==='insightsCancel'){if(message.scope===undefined||['search','timeline'].includes(message.scope))insights?.cancel(message.scope);return;}

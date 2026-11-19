@@ -67,9 +67,21 @@ Windows preload **必须**继续提供 `webkit.messageHandlers.weibo`，以便 U
 
 ```
 desktop/win/
-  main.js            Electron 入口（package.json "main"）
-  preload.js         注入 weiboAppInfo + webkit.messageHandlers.weibo
-  external-links.js  外链白名单（移植自 ExternalLinks.swift）
+  main.js                 Electron 入口（package.json "main"）
+  preload.js              注入 weiboAppInfo + webkit.messageHandlers.weibo
+  external-links.js       外链白名单（移植自 ExternalLinks.swift）
+  feedback-diagnostics.js 运行日志投影 / 反馈快照（对齐 FeedbackDiagnostics.swift 契约）
+  ui-event-queue.js       冷启动时引擎→UI 事件排队（ready 前）
+  paths.js                asar vs asar.unpacked 根路径解析
+  shell-actions.js        UI→引擎 action 白名单
+
+desktop/foreground-queue.js   bridge 前台操作队列（自动任务让路）
+desktop/ui/home-surface.js    首页加载 / 未读投影（从 app.js 抽出）
+desktop/ui/account-surface.js 账户登录 / 余额展示
+desktop/ui/task-card.js       任务卡进度与结果展示
+
+build/
+  icon.ico / icon.png     Windows 应用图标（scripts/make-win-icon.cjs）
 
 desktop/ui/          共享 UI（改功能多半改这里）
 desktop/bridge.js    共享桌面引擎（改任务/登录/导出多半改这里）
@@ -78,6 +90,8 @@ weibo_cli.js         CLI 聚合入口
 
 scripts/
   fix-weibo-cli-open-browser.cjs   Windows OAuth 打开浏览器补丁（postinstall）
+  make-win-icon.cjs                生成 build/icon.ico
+  package-win.cjs                  Windows 打包入口
   build-desktop.js / package-desktop.js   仅 macOS
 
 dist-win/            Windows 打包输出（gitignore）
@@ -88,6 +102,7 @@ dist-win/            Windows 打包输出（gitignore）
 | 用途 | 路径 |
 |------|------|
 | 默认资料目录（工作区） | `%APPDATA%\selnokk.weibo.reader` |
+| 运行日志（反馈诊断） | `%APPDATA%\selnokk.weibo.reader\private\runtime-logs\` |
 | Electron 壳状态（上次工作区等） | `%APPDATA%\weibo-reader\shell-state.json` |
 | 开发时工程根 | 仓库根目录；打包后为 `app.getAppPath()` |
 
@@ -107,6 +122,9 @@ npm install
 
 # 开发启动 Windows 桌面
 npm run desktop:win
+
+# 重新生成品牌图标（通常已提交 build/icon.ico）
+npm run desktop:win:icon
 
 # 打 Windows 安装包 + 便携版 → dist-win/
 npm run desktop:win:package
@@ -133,7 +151,7 @@ npm run desktop:win:package
 | `compression: maximum` + `nsis.differentialPackage: false` | 提高安装包压缩比（放弃 blockmap 增量更新） |
 | `files` 排除 Swift / 测试 / md 许可 / electron 开发依赖 | 应用层约数 MB |
 | `npmRebuild: false` | 无原生模块，加快打包 |
-| `asar: false` | **有意为之**：引擎用 `ELECTRON_RUN_AS_NODE` 直接跑 `bridge.js` |
+| `asar: true` + `asarUnpack` | 壳 `desktop/win` 留 asar；引擎与 UI/`lib`/`node_modules` 解到 `app.asar.unpacked`（Node 子进程与相对脚本路径都需真实文件） |
 
 启动：`main.js` 先加载 UI、再 `setImmediate` 拉起引擎；去掉应用菜单、关闭拼写检查，并设置 `lang=zh-CN`。再往下压体积需要换壳或裁剪 Electron 本体，性价比低。
 
@@ -249,12 +267,11 @@ npm run desktop:package   # 需要 hdiutil / codesign
 
 ### 6.6 功能完整度差异（相对 macOS）
 
-Windows Electron 壳已覆盖主路径：窗口、工作区、导入导出对话框、打开报告/文件夹、外链白名单、复制、登录/任务转发。  
-以下为简化或未 1:1 移植，改到相关功能时注意：
+Windows Electron 壳已覆盖主路径：窗口、工作区、导入导出对话框、打开报告/文件夹、外链白名单、复制、登录/任务转发、品牌 `.ico`、反馈诊断快照（`desktop/win/feedback-diagnostics.js`，字段对齐 UI `feedback.js` / macOS 契约）。  
+以下仍为简化或未 1:1 移植：
 
 - 原生菜单栏 / 睡眠唤醒 `followWake` 等
-- macOS 完整 FeedbackDiagnostics 持久化与诊断快照（Windows 为简化反馈）
-- App 图标仍为 Electron 默认图标（未做 icns/ico 品牌资源）
+- RuntimeLogStore 的 POSIX 锁、`openat` 级 hardening（Windows 用目录 JSONL + HMAC 匿名化近似）
 
 ---
 
@@ -270,6 +287,7 @@ Windows Electron 壳已覆盖主路径：窗口、工作区、导入导出对话
 | `chooseDataExport` / `chooseDataImport` | 壳：存盘/打开 `.wrdpack` |
 | `external` | 壳：白名单后 `shell.openExternal` |
 | `copy` | 壳：剪贴板 |
+| `feedbackPreview` / `feedbackCopy` / `feedbackExport` | 壳：诊断快照预览 / 复制模板 / 导出 `.log` |
 | `localExport` / `localInventory` / … | 壳转发引擎（写入类会记入 localWriters） |
 
 ### 引擎 → UI（部分）
@@ -293,6 +311,7 @@ Windows Electron 壳已覆盖主路径：窗口、工作区、导入导出对话
 - **改登录/打开浏览器相关**时核对 weibo-cli 补丁是否仍生效。
 - **提交前**不要把 `dist-win/`、个人 `data/`、凭据、`.wrdpack` 打进版本库。
 - 用户若只要开发调试：`npm run desktop:win` 即可；只有要分发时才 `desktop:win:package`（签名见 §4.2）。
+- CI：`.github/workflows/ci.yml` 在 Windows 上跑 `npm test`，并通过 `electron-builder --dir` 做打包冒烟（不出安装包）。
 
 ---
 
